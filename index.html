@@ -206,7 +206,7 @@
 
   <div class="input-row">
   <input id="buscaDetalhes" placeholder="Buscar" oninput="atualizarDetalhes()">
-  <button class="btn-clear" onclick="document.getElementById('buscaDetalhes').value=''; atualizarDetalhes();">X</button>
+  <button id="btnLimparDetalhes" class="btn-clear" onclick="document.getElementById('buscaDetalhes').value=''; atualizarDetalhes();">X</button>
 </div>
 
   <div class="table-container">
@@ -340,8 +340,8 @@
       <table>
         <thead>
           <tr>
-            <th></th>
-            <th>#</th>
+            <th width="30"></th>
+            <th width="30">#</th>
             <th>Data</th>
             <th>Kg</th>
           </tr>
@@ -350,7 +350,7 @@
       </table>
     </div>
 
-    <div class="modal-saida-botoes">
+    <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn-modal btn-confirmar" onclick="confirmarSaida()">Confirmar</button>
       <button class="btn-modal btn-cancelar" onclick="cancelarSaida()">Cancelar</button>
     </div>
