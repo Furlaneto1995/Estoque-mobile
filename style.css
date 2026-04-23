@@ -474,12 +474,13 @@ html, body {
 
 #estoque table th:nth-child(1),
 #estoque table td:nth-child(1) {
-  width: 14%;
+  width: 17%;
+  white-space: nowrap;
 }
 
 #estoque table th:nth-child(2),
 #estoque table td:nth-child(2) {
-  width: 20%;
+  width: 18%;
 }
 
 #estoque table th:nth-child(3),
@@ -490,7 +491,7 @@ html, body {
 
 #estoque table th:nth-child(4),
 #estoque table td:nth-child(4) {
-  width: 22%;
+  width: 21%;
   white-space: nowrap;
 }
 
@@ -514,11 +515,6 @@ html, body {
 
 /* ===== Ajuste fino Histórico ===== */
 
-#historico table {
-  table-layout: fixed;
-  width: 100%;
-}
-
 #historico table th:nth-child(1),
 #historico table td:nth-child(1) {
   width: 18%;
@@ -527,23 +523,25 @@ html, body {
 
 #historico table th:nth-child(2),
 #historico table td:nth-child(2) {
-  width: 18%;
-  white-space: nowrap;
+  width: 21%;
+  white-space: normal;
 }
 
 #historico table th:nth-child(3),
 #historico table td:nth-child(3) {
   width: 14%;
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 #historico table th:nth-child(4),
 #historico table td:nth-child(4) {
-  width: 20%;
+  width: 23%;
 }
 
 #historico table th:nth-child(5),
 #historico table td:nth-child(5) {
-  width: 12%;
+  width: 14%;
 }
 
 #historico table th:nth-child(6),
@@ -1033,9 +1031,9 @@ tr.grupo-aberto .btn-expandir-detalhe:hover {
   background: white;
   padding: 16px;
   border-radius: 12px;
-  min-width: 300px;
-  max-width: 90vw;
-  max-height: 80vh;
+  width: 90%;
+  max-width: 400px; /* Deixa o modal mais quadrado e contido */
+  max-height: 85vh;
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
   display: flex;
   flex-direction: column;
@@ -1046,6 +1044,8 @@ tr.grupo-aberto .btn-expandir-detalhe:hover {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 10px;
 }
 
 .modal-saida-header h3 {
@@ -1058,13 +1058,19 @@ tr.grupo-aberto .btn-expandir-detalhe:hover {
   font-size: 14px;
   font-weight: 700;
   color: #dc2626;
+  background: #fee2e2;
+  padding: 4px 8px;
+  border-radius: 4px;
 }
 
 .modal-saida-tabela {
+  flex: 1;
   overflow-y: auto;
-  max-height: 50vh;
+  border: 1px solid #e2e8f0; /* Borda externa arredondada */
+  border-radius: 8px;
 }
 
+/* Removemos as bordas pesadas e o azul forte do cabeçalho */
 .modal-saida-tabela table {
   width: 100%;
   border-collapse: collapse;
@@ -1073,37 +1079,26 @@ tr.grupo-aberto .btn-expandir-detalhe:hover {
 
 .modal-saida-tabela th,
 .modal-saida-tabela td {
-  border: 1px solid #ccc;
+  border: none;
+  border-bottom: 1px solid #e2e8f0;
   padding: 8px 4px;
   text-align: center;
 }
 
 .modal-saida-tabela thead th {
-  background: #2563eb;
-  color: white;
+  background: #f8fafc; /* Cinza bem clarinho igual ao original */
+  color: #475569;
   position: sticky;
   top: 0;
+  z-index: 1;
 }
 
 .bobina-selecionada td {
-  background: #fef2f2 !important;
+  background: #fee2e2 !important;
 }
 
 .bobina-descontada td {
-  background: #f0fdf4 !important;
-}
-
-.modal-saida-botoes {
-  display: flex;
-  gap: 8px;
-}
-
-.modal-saida-botoes button {
-  flex: 1;
-}
-
-.linha-consumo-parcial td {
-  background: #fff7ed;
+  background: #dcfce7 !important;
 }
 
 /* Bloqueia seleção de texto em tudo */
@@ -1124,4 +1119,57 @@ input, select, textarea {
 
 .linha-excluida td {
   background: #fce4ec;
+}
+
+/* ================= HISTÓRICO NOVO COMPORTAMENTO ================= */
+
+/* Entrada sempre verde, independente do status */
+.linha-entrada td {
+  background: #f0fdf4 !important;
+}
+
+/* Status entre parênteses na linha de entrada */
+.entrada-status {
+  font-size: 10px;
+  opacity: 0.65;
+  font-weight: normal;
+  display: block;
+  margin-top: 2px;
+}
+
+/* Referência da bobina original nos registros de consumo/exclusão */
+.ref-texto {
+  font-size: 10px;
+  opacity: 0.65;
+  display: block;
+  margin-top: 3px;
+  font-style: italic;
+  line-height: 1.3;
+  font-weight: normal;
+  white-space: normal;
+}
+
+/* ================= HISTÓRICO AJUSTES FINOS ================= */
+
+.entrada-status {
+  display: block;
+  font-size: 10px;
+  opacity: 0.65;
+  font-weight: normal;
+  margin-top: 2px;
+  line-height: 1.15;
+}
+
+.ref-texto {
+  display: block;
+  font-size: 9px;
+  opacity: 0.7;
+  margin-top: 2px;
+  line-height: 1.15;
+  font-style: italic;
+}
+
+/* Nova cor do consumo parcial */
+.linha-consumo-parcial td {
+  background: #e0f2fe !important; /* azul claro */
 }
