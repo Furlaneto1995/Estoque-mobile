@@ -114,6 +114,15 @@ function carregarDados() {
   estoque = JSON.parse(localStorage.getItem("estoque")) || {};
   historico = JSON.parse(localStorage.getItem("historico")) || [];
 
+  // Garante que todas as entradas tenham ID
+  historico.forEach(h => {
+    if (h.tipo === "Entrada" && !h.id) {
+      h.id = Date.now() + Math.random();
+    }
+  });
+
+  salvarDados();
+
   atualizarTabela();
   atualizarHistorico();
 }
@@ -764,32 +773,32 @@ function remover(item){
   }
 
   backup = {
-    tipo:'estoque',
+    tipo: 'estoque',
     item,
-    valor:estoque[item],
+    valor: estoque[item],
     qtd: estoque[item + '_qtd']
   };
 
-  // Marca cada bobina ativa como removida do estoque
-  // e cria um registro individual de exclusão no histórico
-  historico.forEach(h => {
-    if (
-      h.item === item &&
-      h.tipo === "Entrada" &&
-      !h.consumida &&
-      !h._removidaEstoque
-    ) {
-      h._removidaEstoque = true;
+  // Cria uma cópia das entradas antes de modificar
+  let entradasParaExcluir = historico.filter(h =>
+    h.item === item &&
+    h.tipo === "Entrada" &&
+    !h.consumida &&
+    !h._removidaEstoque
+  );
 
-historico.push({
-  data: new Date().toLocaleString(),
-  tipo: 'Saída',
-  item: opcaoAtual.chave,
-  qtd: reg.qtd,
-  excluida: true,
-  bobinaOriginalId: reg.id || null
-});
-    }
+  // Marca cada entrada como removida e cria registro individual
+  entradasParaExcluir.forEach(h => {
+    h._removidaEstoque = true;
+
+    historico.push({
+      data: new Date().toLocaleString(),
+      tipo: 'Saída',
+      item: item,
+      qtd: h.qtd,
+      excluida: true,
+      bobinaOriginalId: h.id || null
+    });
   });
 
   delete estoque[item];
@@ -803,18 +812,16 @@ historico.push({
     estoque[item] = backup.valor;
     estoque[item + '_qtd'] = backup.qtd;
 
+    // Desfaz a marcação de removida
     historico.forEach(h => {
       if (h.item === item && h._removidaEstoque) {
         delete h._removidaEstoque;
       }
     });
 
-    // remove os registros de exclusão criados para esse item
+    // Remove os registros de exclusão criados
     for (let i = historico.length - 1; i >= 0; i--) {
-      if (
-        historico[i].item === item &&
-        historico[i].excluida === true
-      ) {
+      if (historico[i].item === item && historico[i].excluida === true) {
         historico.splice(i, 1);
       }
     }
@@ -1066,13 +1073,24 @@ let matchesBusca = textoCompleto.includes(termo);
                 let movTexto = d.movimentacao;
     if (d.original.consumida) movTexto = 'Consumida';
     if (d.movimentacao === 'Consumo parcial') movTexto = 'Cons.<br>parcial';
-            if (d.original.excluida) {
-      let refOriginal = null;
-      if (d.original.bobinaOriginalId) {
-        refOriginal = historico.find(h => h.id === d.original.bobinaOriginalId);
-      }
-            movTexto = 'Excluída' + (refOriginal ? '<br><small style="font-size:9px;opacity:0.7;">Ref: ' + refOriginal.data.replace(", ", "<br>") + '</small>' : '');
-    }
+if (d.original.excluida) {
+  let refOriginal = null;
+
+  if (d.original.bobinaOriginalId) {
+    refOriginal = historico.find(h =>
+      h.id === d.original.bobinaOriginalId &&
+      h.tipo === "Entrada"
+    );
+  }
+
+  movTexto = 'Excluída';
+
+  if (refOriginal) {
+    movTexto += '<br><small style="font-size:9px;opacity:0.7;">Ref: ' +
+      refOriginal.data.replace(", ", "<br>") +
+      '</small>';
+  }
+}
 
     historicoTabela.innerHTML += `
   <tr class="${corLinha}">
