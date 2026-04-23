@@ -466,9 +466,15 @@ if(tipoMov === 'remove'){
   return;
 }else{
   estoque[identificador] += qtd;
+  // Incrementa contador de bobinas
+  if (!estoque[identificador + '_qtd']) {
+    estoque[identificador + '_qtd'] = 0;
+  }
+  estoque[identificador + '_qtd']++;
 }
 
 historico.push({
+  id: Date.now() + Math.random(),
   data: new Date().toLocaleString(),
   tipo: tipoMov === 'add' ? 'Entrada' : 'Saída',
   item: identificador,
@@ -555,14 +561,15 @@ let totalTampas = 0;
 let totalLaminacao = 0;
 
 let dados = Object.keys(estoque)
+.filter(i => !i.endsWith('_qtd'))
 .map(i => {
 
  let partes = i.split(" - ");
 
-if (partes.length < 2) return null;
+ if (partes.length < 2) return null;
 
-let item = partes[0];
-let versao = partes[1].replace("V", "").trim();
+ let item = partes[0];
+ let versao = partes[1].replace("V", "").trim();
 
   let tipoEncontrado = "";
 
@@ -582,51 +589,50 @@ let versao = partes[1].replace("V", "").trim();
 
   let tamanho = banco[tipoEncontrado][item][versao].tamanho;
   let peso = estoque[i];
-// ✅ Calcular quantidade de entradas (só as que compõem o saldo atual)
-let pesoAtual = estoque[i] || 0;
-let entradasItem = historico.filter(h => h.item === i && h.tipo === "Entrada");
-let quantidadeEntradas = 0;
-let somaTemp = 0;
 
-for (let idx = entradasItem.length - 1; idx >= 0; idx--) {
-  if (somaTemp >= pesoAtual) break;
-  somaTemp += entradasItem[idx].qtd;
-  quantidadeEntradas++;
-}
+  let quantidadeEntradas = estoque[i + '_qtd'] || 0;
 
-// ✅ SOMA TOTAL GERAL
-pesoTotal += peso;
+  if (quantidadeEntradas === 0 && estoque[i] > 0) {
+    let entradasItem = historico.filter(h =>
+  h.item === i &&
+  h.tipo === "Entrada" &&
+  !h.consumida &&
+  !h._removidaEstoque
+);
+    let somaTemp = 0;
+    for (let idx = entradasItem.length - 1; idx >= 0; idx--) {
+      if (somaTemp >= estoque[i]) break;
+      somaTemp += entradasItem[idx].qtd;
+      quantidadeEntradas++;
+    }
+    if (quantidadeEntradas === 0) quantidadeEntradas = 1;
+  }
 
-// ✅ SOMA POR TIPO
-if (tipoEncontrado === "brf") {
-  totalBrf += peso;
-}
-if (tipoEncontrado === "tampas") {
-  totalTampas += peso;
-}
-if (tipoEncontrado === "laminacao") {
-  totalLaminacao += peso;
-}
+  pesoTotal += peso;
+
+  if (tipoEncontrado === "brf") totalBrf += peso;
+  if (tipoEncontrado === "tampas") totalTampas += peso;
+  if (tipoEncontrado === "laminacao") totalLaminacao += peso;
 
   return {
-  identificador: i,
-  tipo: tipoEncontrado,
-  item: item,
-  versao: versao,
-  tamanho: tamanho,
-  peso: peso,
-  qtdEntradas: quantidadeEntradas
-};
+    identificador: i,
+    tipo: tipoEncontrado,
+    item: item,
+    versao: versao,
+    tamanho: tamanho,
+    peso: peso,
+    qtdEntradas: quantidadeEntradas
+  };
 
 })
+.filter(d => d && d !== null)
 .filter(d => {
   let textoCompleto = `
-    ${nomeBonitoTipo(d.tipo)}
+    ${d.tipo}
     ${d.item}
     ${d.versao}
     ${d.tamanho}
     ${d.peso}
-    ${d.qtdEntradas}
   `.toLowerCase();
 
   return textoCompleto.includes(termo);
@@ -757,20 +763,70 @@ function remover(item){
     return;
   }
 
-  backup = { tipo:'estoque', item, valor:estoque[item] };
+  backup = {
+    tipo:'estoque',
+    item,
+    valor:estoque[item],
+    qtd: estoque[item + '_qtd']
+  };
 
-delete estoque[item];
+  // Marca cada bobina ativa como removida do estoque
+  // e cria um registro individual de exclusão no histórico
+  historico.forEach(h => {
+    if (
+      h.item === item &&
+      h.tipo === "Entrada" &&
+      !h.consumida &&
+      !h._removidaEstoque
+    ) {
+      h._removidaEstoque = true;
 
-salvarDados();
-atualizarTabela();
+historico.push({
+  data: new Date().toLocaleString(),
+  tipo: 'Saída',
+  item: opcaoAtual.chave,
+  qtd: reg.qtd,
+  excluida: true,
+  bobinaOriginalId: reg.id || null
+});
+    }
+  });
 
-mostrarToast(() => {
-  estoque[item] = backup.valor;
+  delete estoque[item];
+  delete estoque[item + '_qtd'];
+
   salvarDados();
   atualizarTabela();
-});
+  atualizarHistorico();
 
-}/* ================= HISTÓRICO ================= */
+  mostrarToast(() => {
+    estoque[item] = backup.valor;
+    estoque[item + '_qtd'] = backup.qtd;
+
+    historico.forEach(h => {
+      if (h.item === item && h._removidaEstoque) {
+        delete h._removidaEstoque;
+      }
+    });
+
+    // remove os registros de exclusão criados para esse item
+    for (let i = historico.length - 1; i >= 0; i--) {
+      if (
+        historico[i].item === item &&
+        historico[i].excluida === true
+      ) {
+        historico.splice(i, 1);
+      }
+    }
+
+    salvarDados();
+    atualizarTabela();
+    atualizarHistorico();
+  });
+
+}
+
+/* ================= HISTÓRICO ================= */
 
 function ordenarHistorico(coluna) {
 
@@ -1003,12 +1059,20 @@ let matchesBusca = textoCompleto.includes(termo);
 
     let indexReal = historico.indexOf(d.original);
 
-        let corLinha = d.movimentacao === 'Entrada' ? 'linha-entrada' : 'linha-saida';
+    let corLinha = d.movimentacao === 'Entrada' ? 'linha-entrada' : 'linha-saida';
     if (d.original.consumida) corLinha = 'linha-consumida';
     if (d.movimentacao === 'Consumo parcial') corLinha = 'linha-consumo-parcial';
-            let movTexto = d.movimentacao;
+    if (d.original.excluida) corLinha = 'linha-excluida';
+                let movTexto = d.movimentacao;
     if (d.original.consumida) movTexto = 'Consumida';
-    if (d.movimentacao === 'Consumo parcial') movTexto = 'Consumo<br>parcial';
+    if (d.movimentacao === 'Consumo parcial') movTexto = 'Cons.<br>parcial';
+            if (d.original.excluida) {
+      let refOriginal = null;
+      if (d.original.bobinaOriginalId) {
+        refOriginal = historico.find(h => h.id === d.original.bobinaOriginalId);
+      }
+            movTexto = 'Excluída' + (refOriginal ? '<br><small style="font-size:9px;opacity:0.7;">Ref: ' + refOriginal.data.replace(", ", "<br>") + '</small>' : '');
+    }
 
     historicoTabela.innerHTML += `
   <tr class="${corLinha}">
@@ -1036,33 +1100,6 @@ let matchesBusca = textoCompleto.includes(termo);
 
 }
 
-
-
-window.removerHistorico = function(i){
-
-  if(!confirm("Tem certeza que deseja remover este registro do histórico?")){
-    return;
-  }
-
-  backup = {
-    tipo: 'historico',
-    index: i,
-    valor: historico[i]
-  };
-
-  historico.splice(i, 1);
-
-salvarDados();
-
-atualizarHistorico();
-
-mostrarToast(() => {
-  historico.splice(backup.index, 0, backup.valor);
-  salvarDados();
-  atualizarHistorico();
-});
-
-};
 /* ================= TOAST ================= */
 
 function mostrarToast(callback){
@@ -1590,8 +1627,9 @@ function atualizarDetalhes() {
   let totalBobinas = 0;
 
      // 1. Filtra entradas do tipo selecionado (ativas ou consumidas)
-  let entradas = historico.filter(h => {
+    let entradas = historico.filter(h => {
     if (h.tipo !== "Entrada") return false;
+    if (h._removidaEstoque) return false;
     let partes = h.item.split(" - V");
     if (partes.length < 2) return false;
     let item = partes[0];
@@ -1644,6 +1682,30 @@ function atualizarDetalhes() {
       registros: [...consumidas, ...registrosSelecionados],
       total: pesoAtual
     };
+  });
+
+    // Garante que itens existentes no estoque apareçam mesmo sem registro no histórico
+  Object.keys(estoque).filter(chave => !chave.endsWith('_qtd')).forEach(chave => {
+    let partes = chave.split(" - V");
+    if (partes.length < 2) return;
+
+    let item = partes[0];
+    let versao = partes[1];
+
+    let tipoEncontrado = "";
+    Object.keys(banco).forEach(t => {
+      if (banco[t] && banco[t][item]) tipoEncontrado = t;
+    });
+
+    if (tipoEncontrado !== tipoDetalheAtual) return;
+
+    if (!agrupado[chave]) {
+      agrupado[chave] = {
+        registros: [],
+        total: estoque[chave] || 0,
+        semHistorico: true
+      };
+    }
   });
 
   // 3. Cria lista de chaves (filtradas pela busca) e ordena
@@ -1735,35 +1797,49 @@ function atualizarDetalhes() {
     });
     tbody.appendChild(tr);
 
-    // Mini legenda (escondida)
-    let trLegenda = document.createElement('tr');
-    trLegenda.className = "detalhe-legenda hidden";
-    trLegenda.setAttribute('data-grupo', idLimpo);
-        trLegenda.innerHTML = `
-      <td style="text-align:center;width:2ch;">#</td>
-      <td colspan="2" style="text-align:center;">Data 📅</td>
-      <td style="text-align:center;">Kg</td>
-      <td colspan="2"></td>
-    `;
-    tbody.appendChild(trLegenda);
-
-    // Linhas individuais (escondidas)
-        agrupado[chave].registros.forEach((reg, idx) => {
-      let indexReal = historico.indexOf(reg);
-      let trReg = document.createElement('tr');
-      trReg.className = "detalhe-registro hidden" + (reg.consumida ? " bobina-consumida" : "");
-      trReg.setAttribute('data-grupo', idLimpo);
-      trReg.innerHTML = `
-        <td style="text-align:center;width:2ch;"><strong>${idx + 1}</strong></td>
-        <td colspan="2" style="text-align:center;font-size:11px;">${reg.data}</td>
-        <td style="text-align:center;"><strong>${Math.round(reg.qtd)}</strong></td>
+        if (agrupado[chave].registros.length > 0) {
+      // Mini legenda (escondida)
+      let trLegenda = document.createElement('tr');
+      trLegenda.className = "detalhe-legenda hidden";
+      trLegenda.setAttribute('data-grupo', idLimpo);
+      trLegenda.innerHTML = `
+        <td style="text-align:center;width:2ch;">#</td>
+        <td colspan="2" style="text-align:center;">📅</td>
+        <td style="text-align:center;">Kg</td>
         <td colspan="2"></td>
       `;
-      longPress(trReg, function() {
-        abrirModalOpcoes('bobina', chave, indexReal);
+      tbody.appendChild(trLegenda);
+
+      // Linhas individuais (escondidas)
+      agrupado[chave].registros.forEach((reg, idx) => {
+        let indexReal = historico.indexOf(reg);
+        let trReg = document.createElement('tr');
+        trReg.className = "detalhe-registro hidden" + (reg.consumida ? " bobina-consumida" : "");
+        trReg.setAttribute('data-grupo', idLimpo);
+        trReg.innerHTML = `
+          <td style="text-align:center;width:2ch;"><strong>${idx + 1}</strong></td>
+          <td colspan="2" style="text-align:center;font-size:11px;">${reg.data}</td>
+          <td style="text-align:center;"><strong>${Math.round(reg.qtd)}</strong></td>
+          <td colspan="2"></td>
+        `;
+        longPress(trReg, function() {
+          abrirModalOpcoes('bobina', chave, indexReal);
+        });
+        tbody.appendChild(trReg);
       });
-      tbody.appendChild(trReg);
-    });
+
+    } else {
+      // Item sem registros no histórico
+      let trSem = document.createElement('tr');
+      trSem.className = "detalhe-registro hidden";
+      trSem.setAttribute('data-grupo', idLimpo);
+      trSem.innerHTML = `
+        <td colspan="6" style="text-align:center;font-size:11px;color:#64748b;">
+          Sem registro no histórico
+        </td>
+      `;
+      tbody.appendChild(trSem);
+    }
   });
 
   document.getElementById('detalheTotalPeso').textContent = formatarPeso(pesoTotalAcumulado) + ' kg';
@@ -2034,19 +2110,26 @@ function consumirBobina() {
     let reg = historico[opcaoAtual.indexHistorico];
     if (!reg) return;
 
-    if (reg.consumida) {
+        if (reg.consumida) {
       reg.consumida = false;
       if (estoque[opcaoAtual.chave]) {
         estoque[opcaoAtual.chave] += reg.qtd;
       } else {
         estoque[opcaoAtual.chave] = reg.qtd;
       }
+      if (!estoque[opcaoAtual.chave + '_qtd']) estoque[opcaoAtual.chave + '_qtd'] = 0;
+      estoque[opcaoAtual.chave + '_qtd']++;
     } else {
       reg.consumida = true;
       if (estoque[opcaoAtual.chave]) {
         estoque[opcaoAtual.chave] -= reg.qtd;
         if (estoque[opcaoAtual.chave] <= 0) {
           delete estoque[opcaoAtual.chave];
+          delete estoque[opcaoAtual.chave + '_qtd'];
+        } else {
+          if (estoque[opcaoAtual.chave + '_qtd'] > 0) {
+            estoque[opcaoAtual.chave + '_qtd']--;
+          }
         }
       }
     }
@@ -2089,10 +2172,28 @@ function consumirBobina() {
 function excluirConsumidas() {
   if (!confirm("Remover todas as bobinas consumidas de " + opcaoAtual.chave + "?")) return;
 
-  for (let i = historico.length - 1; i >= 0; i--) {
-    if (historico[i].item === opcaoAtual.chave && historico[i].tipo === "Entrada" && historico[i].consumida) {
-      historico.splice(i, 1);
+  let pesoConsumidas = 0;
+
+  historico.forEach(h => {
+    if (
+      h.item === opcaoAtual.chave &&
+      h.tipo === "Entrada" &&
+      h.consumida &&
+      !h._removidaEstoque
+    ) {
+      h._removidaEstoque = true;
+      pesoConsumidas += h.qtd;
     }
+  });
+
+  if (pesoConsumidas > 0) {
+    historico.push({
+      data: new Date().toLocaleString(),
+      tipo: 'Saída',
+      item: opcaoAtual.chave,
+      qtd: pesoConsumidas,
+      excluida: true
+    });
   }
 
   salvarDados();
@@ -2108,26 +2209,62 @@ function excluirBobina() {
     let reg = historico[opcaoAtual.indexHistorico];
     if (!reg) return;
 
+    // Atualiza estoque
     if (!reg.consumida && estoque[opcaoAtual.chave]) {
       estoque[opcaoAtual.chave] -= reg.qtd;
+
+      if (estoque[opcaoAtual.chave + '_qtd'] > 0) {
+        estoque[opcaoAtual.chave + '_qtd']--;
+      }
+
       if (estoque[opcaoAtual.chave] <= 0) {
         delete estoque[opcaoAtual.chave];
+        delete estoque[opcaoAtual.chave + '_qtd'];
       }
     }
 
-    historico.splice(opcaoAtual.indexHistorico, 1);
+    // Mantém a entrada original no histórico, mas marca que saiu do estoque
+    reg._removidaEstoque = true;
+
+    // Cria UM registro de exclusão dessa bobina
+    historico.push({
+      data: new Date().toLocaleString(),
+      tipo: 'Saída',
+      item: opcaoAtual.chave,
+      qtd: reg.qtd,
+      excluida: true,
+      bobinaOriginalId: reg.id || null
+    });
 
   } else if (opcaoAtual.tipo === 'item') {
 
     if (!confirm("Remover TODAS as bobinas de " + opcaoAtual.chave + "?")) return;
 
-    delete estoque[opcaoAtual.chave];
+    // Marca cada bobina ativa como removida do estoque
+    // e cria um registro individual de exclusão
+    historico
+      .filter(h =>
+        h.item === opcaoAtual.chave &&
+        h.tipo === "Entrada" &&
+        !h.consumida &&
+        !h._removidaEstoque
+      )
+      .forEach(h => {
+        h._removidaEstoque = true;
 
-    for (let i = historico.length - 1; i >= 0; i--) {
-      if (historico[i].item === opcaoAtual.chave && historico[i].tipo === "Entrada") {
-        historico.splice(i, 1);
-      }
-    }
+        historico.push({
+          data: new Date().toLocaleString(),
+          tipo: 'Saída',
+          item: opcaoAtual.chave,
+          qtd: h.qtd,
+          excluida: true,
+          bobinaOriginalId: h.id || null
+        });
+      });
+
+    // Remove do estoque
+    delete estoque[opcaoAtual.chave];
+    delete estoque[opcaoAtual.chave + '_qtd'];
   }
 
   salvarDados();
@@ -2322,8 +2459,7 @@ function processarZeradas(indice) {
 
 function zerouConsumir() {
   let idx = bobinaZeradaAtual.indexReal;
-  let bob = historico[idx];
-  bob.consumida = true;
+  historico[idx]._consumir = true;
 
   document.getElementById('modalZerou').classList.add('hidden');
   processarZeradas(bobinaZeradaAtual.indiceZerada + 1);
@@ -2341,7 +2477,7 @@ function finalizarSaida() {
   // Calcula tudo primeiro
   let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a + b, 0);
 
-  let bobsConsumidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx].consumida);
+    let bobsConsumidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._consumir);
   let bobsExcluidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._excluir);
 
   let pesoDescontadoParcial = 0;
@@ -2381,11 +2517,19 @@ function finalizarSaida() {
     mensagemFinal += "Removido " + Math.round(pesoDescontadoParcial) + "kg (" + itemNome + ", V" + versaoNome + ")";
   }
 
-  // Aplica os descontos no estoque
-  if (estoque[saidaAtual.identificador]) {
+    if (estoque[saidaAtual.identificador]) {
     estoque[saidaAtual.identificador] -= totalDescontado;
+
+    // Decrementa QTD pelas bobinas zeradas
+    let qtdKey = saidaAtual.identificador + '_qtd';
+    if (saidaAtual.zeradas.length > 0 && estoque[qtdKey]) {
+      estoque[qtdKey] -= saidaAtual.zeradas.length;
+      if (estoque[qtdKey] < 0) estoque[qtdKey] = 0;
+    }
+
     if (estoque[saidaAtual.identificador] <= 0) {
       delete estoque[saidaAtual.identificador];
+      delete estoque[qtdKey];
     }
   }
 
@@ -2397,10 +2541,11 @@ function finalizarSaida() {
     }
   });
 
-  // Registra consumidas no histórico
+    // Registra consumidas no histórico
   bobsConsumidas.forEach(idx => {
     let bob = historico[idx];
     if (bob) {
+      bob.consumida = true;
       historico.push({
         data: new Date().toLocaleString(),
         tipo: 'Saída',
@@ -2408,6 +2553,7 @@ function finalizarSaida() {
         qtd: bob.qtd,
         consumida: true
       });
+      delete bob._consumir;
     }
   });
 
@@ -2444,10 +2590,14 @@ function finalizarSaida() {
     }
   });
 
-  // Remove bobinas marcadas pra excluir
+    // Remove bobinas marcadas pra excluir
   for (let i = historico.length - 1; i >= 0; i--) {
     if (historico[i]._excluir) {
       historico.splice(i, 1);
+    }
+    // Limpa flags temporárias
+    if (historico[i] && historico[i]._consumir) {
+      delete historico[i]._consumir;
     }
   }
 
@@ -2531,26 +2681,36 @@ document.addEventListener("DOMContentLoaded", function() {
   if (btnHistorico) {
     btnHistorico.addEventListener('touchstart', function(e) {
       timerLimpar = setTimeout(function() {
-        if (confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o histórico?\n\nEssa ação não pode ser desfeita.")) {
-          historico = [];
-          salvarDados();
-          atualizarHistorico();
-          if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-          alert("Histórico excluído!");
-        }
+        if (confirm("⚠️ ATENÇÃO!\n\nDeseja limpar o histórico?\n\nRegistros de bobinas que ainda estão no estoque serão mantidos.")) {
+  historico = historico.filter(h =>
+    h.tipo === "Entrada" &&
+    !h.consumida &&
+    !h._removidaEstoque &&
+    estoque[h.item] > 0
+  );
+  salvarDados();
+  atualizarHistorico();
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  alert("Histórico limpo!");
+}
       }, 3000);
     });
     btnHistorico.addEventListener('touchend', function() { clearTimeout(timerLimpar); });
     btnHistorico.addEventListener('touchmove', function() { clearTimeout(timerLimpar); });
     btnHistorico.addEventListener('mousedown', function() {
       timerLimpar = setTimeout(function() {
-        if (confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o histórico?\n\nEssa ação não pode ser desfeita.")) {
-          historico = [];
-          salvarDados();
-          atualizarHistorico();
-          if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-          alert("Histórico excluído!");
-        }
+       if (confirm("⚠️ ATENÇÃO!\n\nDeseja limpar o histórico?\n\nRegistros de bobinas que ainda estão no estoque serão mantidos.")) {
+  historico = historico.filter(h =>
+    h.tipo === "Entrada" &&
+    !h.consumida &&
+    !h._removidaEstoque &&
+    estoque[h.item] > 0
+  );
+  salvarDados();
+  atualizarHistorico();
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  alert("Histórico limpo!");
+}
       }, 3000);
     });
     btnHistorico.addEventListener('mouseup', function() { clearTimeout(timerLimpar); });
@@ -2558,3 +2718,42 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 
 });
+
+window.removerHistorico = function(i){
+
+  let registro = historico[i];
+  if (!registro) return;
+
+  if (
+    registro.tipo === "Entrada" &&
+    !registro.consumida &&
+    !registro._removidaEstoque &&
+    estoque[registro.item] &&
+    estoque[registro.item] > 0
+  ) {
+    alert("Não é possível excluir uma entrada que ainda compõe o estoque.");
+    return;
+  }
+
+  if(!confirm("Tem certeza que deseja remover este registro do histórico?")){
+    return;
+  }
+
+  backup = {
+    tipo: 'historico',
+    index: i,
+    valor: historico[i]
+  };
+
+  historico.splice(i, 1);
+
+  salvarDados();
+  atualizarHistorico();
+
+  mostrarToast(() => {
+    historico.splice(backup.index, 0, backup.valor);
+    salvarDados();
+    atualizarHistorico();
+  });
+
+};
