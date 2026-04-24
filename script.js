@@ -829,16 +829,16 @@ function atualizarHistorico(){
         break;
     }
 
-    html += `
-      <tr class="${corLinha}">
-        <td>${d.data}</td>
-        <td>${movTexto}${refTexto}</td>
-        <td>${nomeBonitoTipo(d.tipo)}</td>
-        <td>${d.item}<br><strong>V ${d.versao}</strong><br><span style="font-size:11px;">${d.tamanho}</span></td>
-        <td>${d.original.qtdOriginal ? Math.round(d.qtd)+'/'+Math.round(d.original.qtdOriginal) : d.qtd}</td>
-        <td><button class='btn-remove' onclick="removerHistorico(${indexReal})">🗑</button></td>
-      </tr>
-    `;
+html += `
+  <tr class="${corLinha}">
+    <td>${d.data}</td>
+    <td>${movTexto}${refTexto}</td>
+    <td>${nomeBonitoTipo(d.tipo)}</td>
+    <td>${d.item}<br><strong>V ${d.versao}</strong><br><span style="font-size:11px;">${d.tamanho}</span></td>
+    <td>${d.original.qtdOriginal ? Math.round(d.qtd)+'/'+Math.round(d.original.qtdOriginal) : d.qtd}</td>
+    <td><button class='btn-menu-historico' onclick="abrirAcoesHistorico(${indexReal})">⋮</button></td>
+  </tr>
+`;
   });
   historicoTabela.innerHTML = html;
 }
@@ -900,6 +900,16 @@ window.executarExportacao = function(){
   }
   const formatoSelecionado = document.querySelector('input[name="formatoExport"]:checked');
   const formato = formatoSelecionado ? formatoSelecionado.value : 'excel';
+
+  if (tipoDados === 'qrcodes') {
+    if (formato === 'imagens') {
+      exportarQRCodesZIP(dataInicioExp, dataFimExp);
+    } else {
+      exportarQRCodes(dataInicioExp, dataFimExp);
+    }
+    fecharModalConfig();
+    return;
+  }
 
   if (formato === 'pdf') {
     if (tipoDados === 'estoque') exportarEstoquePDF(dataInicioExp, dataFimExp);
@@ -1291,7 +1301,10 @@ function atualizarDetalhes() {
           <td style="text-align:center;width:2ch;"><strong>${idx+1}</strong></td>
           <td colspan="2" style="text-align:center;font-size:11px;">${reg.data}</td>
           <td style="text-align:center;"><strong>${Math.round(reg.qtd)}</strong></td>
-          <td colspan="2"></td>
+          <td style="text-align:center;">
+            <button class="btn-qr" onclick="event.stopPropagation(); gerarQRBobina(${indexReal})" title="QR Code">QR</button>
+          </td>
+          <td></td>
         `;
         longPress(trReg, function() { abrirModalOpcoes('bobina', chave, indexReal); });
         tbody.appendChild(trReg);
@@ -2186,3 +2199,1132 @@ function restaurarSnapshotEstado(snapshot) {
   atualizarHistorico();
   if (tipoDetalheAtual) atualizarDetalhes();
 }
+
+function gerarQRBobina(index) {
+  let reg = historico[index];
+  if (!reg || reg.tipo !== "Entrada") return;
+
+  let partes = reg.item.split(" - V");
+  let item = partes[0];
+  let versao = partes[1];
+  let tipo = "";
+
+  Object.keys(banco).forEach(t => {
+    if (banco[t] && banco[t][item]) tipo = t;
+  });
+
+  let tamanho = "";
+  if (tipo && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
+    tamanho = banco[tipo][item][versao].tamanho;
+  }
+
+  // ID limpo sem decimais
+  let idLimpo = "BOB-" + String(Math.floor(reg.id));
+
+  let conteudoQR = JSON.stringify({
+    id: idLimpo,
+    tipo: tipo,
+    item: item,
+    versao: versao,
+    peso: Math.round(reg.qtd),
+    data: reg.data
+  });
+
+  // Limpa container
+  document.getElementById("qrContainer").innerHTML = "";
+
+  // Gera QR
+  new QRCode(document.getElementById("qrContainer"), {
+    text: conteudoQR,
+    width: 200,
+    height: 200,
+    colorDark: "#1e293b",
+    colorLight: "#ffffff",
+    correctLevel: QRCode.CorrectLevel.M
+  });
+
+  // Info abaixo do QR
+  let infoDiv = document.createElement("div");
+  infoDiv.className = "qr-info";
+  infoDiv.innerHTML = `
+    <div><strong>${item}</strong> — V${versao}</div>
+    <div>${tamanho}</div>
+    <div>${Math.round(reg.qtd)} kg</div>
+    <div style="font-size:11px; color:#94a3b8;">${idLimpo}</div>
+  `;
+  document.getElementById("qrContainer").appendChild(infoDiv);
+
+  document.getElementById("modalQR").classList.remove("hidden");
+}
+
+let historicoSelecionadoIndex = null;
+
+function abrirAcoesHistorico(index) {
+  let reg = historico[index];
+  if (!reg) return;
+
+  historicoSelecionadoIndex = index;
+
+  let titulo = document.getElementById("modalHistoricoTitulo");
+  let btnQR = document.getElementById("btnHistoricoQR");
+
+  titulo.textContent = reg.item || "Ações do registro";
+
+  // QR só aparece para entrada
+  btnQR.style.display = (reg.tipo === "Entrada") ? "block" : "none";
+
+  document.getElementById("modalHistoricoAcoes").classList.remove("hidden");
+}
+
+function fecharModalHistoricoAcoes() {
+  document.getElementById("modalHistoricoAcoes").classList.add("hidden");
+  historicoSelecionadoIndex = null;
+}
+
+function abrirQRDoHistorico() {
+  if (historicoSelecionadoIndex === null) return;
+  let idx = historicoSelecionadoIndex;
+  fecharModalHistoricoAcoes();
+  gerarQRBobina(idx);
+}
+
+function confirmarRemoverHistoricoSelecionado() {
+  if (historicoSelecionadoIndex === null) return;
+  let idx = historicoSelecionadoIndex;
+  fecharModalHistoricoAcoes();
+  removerHistorico(idx);
+}
+
+let leitorQR = null;
+let leitorQRAberto = false;
+let scannerProcessando = false;
+let qrLidoAtual = null;
+
+async function fecharTodosScanners() {
+  try {
+    if (leitorQR && leitorQRAberto) {
+      await leitorQR.stop();
+      await leitorQR.clear();
+      leitorQR = null;
+      leitorQRAberto = false;
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner single:", e);
+  }
+  try {
+    if (leitorContinuo && leitorContinuoAberto) {
+      await leitorContinuo.stop();
+      await leitorContinuo.clear();
+      leitorContinuo = null;
+      leitorContinuoAberto = false;
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner contínuo:", e);
+  }
+}
+
+async function abrirScannerQR() {
+  try {
+    await fecharTodosScanners();
+
+    document.getElementById("modalScannerQR").classList.remove("hidden");
+    document.getElementById("scannerStatus").textContent = "Aponte a câmera para o QR da bobina";
+    document.getElementById("reader").innerHTML = "";
+
+    leitorQR = new Html5Qrcode("reader");
+
+    await leitorQR.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: { width: 220, height: 220 }
+      },
+      async (decodedText) => {
+        if (scannerProcessando) return;
+        scannerProcessando = true;
+        await processarLeituraQR(decodedText);
+      },
+      () => {}
+    );
+
+    leitorQRAberto = true;
+  } catch (erro) {
+    console.error("Erro ao abrir scanner QR:", erro);
+    mostrarToast("Não foi possível abrir a câmera", "erro");
+    await fecharScannerQR();
+  }
+}
+
+async function fecharScannerQR() {
+  try {
+    if (leitorQR && leitorQRAberto) {
+      await leitorQR.stop();
+      await leitorQR.clear();
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner:", e);
+  }
+
+  leitorQR = null;
+  leitorQRAberto = false;
+  scannerProcessando = false;
+
+  const modal = document.getElementById("modalScannerQR");
+  if (modal) modal.classList.add("hidden");
+
+  const reader = document.getElementById("reader");
+  if (reader) reader.innerHTML = "";
+}
+
+async function processarLeituraQR(textoLido) {
+  let dados = null;
+
+  try {
+    dados = JSON.parse(textoLido);
+  } catch (erro) {
+    await fecharScannerQR();
+    mostrarToast("QR inválido ou fora do padrão do app", "erro");
+    return;
+  }
+
+  let registroEncontrado = localizarRegistroPorQR(dados);
+
+  await fecharScannerQR();
+
+  mostrarResultadoQR(dados, registroEncontrado);
+  scannerProcessando = false;
+}
+
+function localizarRegistroPorQR(dados) {
+  return historico.find(h => {
+    if (!h || h.tipo !== "Entrada") return false;
+    if (!h.item || !h.item.includes(" - V")) return false;
+
+    let partes = h.item.split(" - V");
+    let item = partes[0];
+    let versao = partes[1];
+
+    // Compara por id (tratando BOB- e decimais)
+    let idQR = String(dados.id || "").replace("BOB-", "");
+    let idHist = String(Math.floor(h.id));
+    let mesmoId = idQR && idHist && idQR === idHist;
+
+    // Compara por composição (item + versão + data)
+    let mesmaComposicao =
+      String(item) === String(dados.item) &&
+      String(versao) === String(dados.versao) &&
+      String(h.data) === String(dados.data);
+
+    // Compara por item + versão + peso (para QRs sem data exata)
+    let mesmoItemVersaoPeso =
+      String(item) === String(dados.item) &&
+      String(versao) === String(dados.versao) &&
+      Math.round(h.qtd) === Math.round(parseFloat(dados.peso));
+
+    return mesmoId || mesmaComposicao || mesmoItemVersaoPeso;
+  }) || null;
+}
+
+function mostrarResultadoQR(dados, registro) {
+  qrLidoAtual = { dados, registro };
+
+  let status = "";
+  let statusTipo = "";
+
+  if (registro) {
+    if (registro._removidaEstoque) {
+      status = `<div style="margin-top:8px; color:#dc2626;"><strong>⚠️ Status:</strong> excluída do estoque</div>`;
+      statusTipo = "excluida";
+    } else if (registro.consumida) {
+      status = `<div style="margin-top:8px; color:#ca8a04;"><strong>⚠️ Status:</strong> consumida</div>`;
+      statusTipo = "consumida";
+    } else {
+      status = `<div style="margin-top:8px; color:#16a34a;"><strong>✅ Status:</strong> ativa no estoque</div>
+                <div style="margin-top:4px; padding:6px 10px; background:#fef3c7; border-radius:6px; color:#92400e; font-size:13px; font-weight:600;">
+                  ⚠️ Esta bobina já está no estoque — entrada duplicada não permitida
+                </div>`;
+      statusTipo = "ativa";
+    }
+  } else {
+    status = `<div style="margin-top:8px; color:#3b82f6;"><strong>🆕 Status:</strong> bobina nova (não encontrada no histórico)</div>`;
+    statusTipo = "nova";
+  }
+
+  let html = `
+    <div><strong>ID:</strong> ${dados.id || '-'}</div>
+    <div><strong>Tipo:</strong> ${dados.tipo ? nomeCompletoTipo(dados.tipo) : '-'}</div>
+    <div><strong>Item:</strong> ${dados.item || '-'}</div>
+    <div><strong>Versão:</strong> ${dados.versao || '-'}</div>
+    <div><strong>Peso:</strong> ${dados.peso || '-'} kg</div>
+    <div><strong>Data:</strong> ${dados.data || '-'}</div>
+    ${status}
+  `;
+
+  document.getElementById("resultadoQRConteudo").innerHTML = html;
+
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let itemExiste = tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)];
+
+  let btnUsar = document.getElementById("btnUsarQRMov");
+  let btnEntradaRapida = document.getElementById("btnEntradaRapidaQR");
+  let btnConsumir = document.getElementById("btnConsumirQR");
+  let btnDesmarcar = document.getElementById("btnDesmarcarQR");
+  let btnExcluir = document.getElementById("btnExcluirQR");
+
+  if (btnUsar) btnUsar.style.display = "none";
+  if (btnEntradaRapida) btnEntradaRapida.style.display = "none";
+  if (btnConsumir) btnConsumir.style.display = "none";
+  if (btnDesmarcar) btnDesmarcar.style.display = "none";
+  if (btnExcluir) btnExcluir.style.display = "none";
+
+  if (itemExiste) {
+    if (statusTipo === "nova") {
+      if (btnUsar) btnUsar.style.display = "block";
+      if (btnEntradaRapida) btnEntradaRapida.style.display = "block";
+    } else if (statusTipo === "ativa") {
+      // Bobina já no estoque: permite consumir ou excluir, mas NÃO entrada
+      if (btnUsar) btnUsar.style.display = "block";
+      if (btnConsumir) btnConsumir.style.display = "block";
+      if (btnExcluir) btnExcluir.style.display = "block";
+    } else if (statusTipo === "consumida") {
+      if (btnDesmarcar) btnDesmarcar.style.display = "block";
+    }
+    // excluída: só fechar
+  }
+
+  document.getElementById("modalResultadoQR").classList.remove("hidden");
+}
+
+function usarQRNaMovimentacao() {
+  if (!qrLidoAtual || !qrLidoAtual.dados) return;
+
+  let dados = qrLidoAtual.dados;
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let item = dados.item;
+  let versao = String(dados.versao);
+  let peso = dados.peso;
+
+  if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
+    mostrarToast("Item do QR não encontrado no cadastro", "erro");
+    return;
+  }
+
+  // Preenche tipo
+  tipoSelect.value = tipo;
+  filtrarPorTipo();
+
+  // Preenche item
+  itemSelect.value = item;
+  itemSelect.dispatchEvent(new Event("change"));
+
+  // Preenche versão
+  versaoSelect.value = versao;
+  atualizarSaldoAtual(item, versao);
+
+  // Preenche busca manual
+  let tamanho = banco[tipo][item][versao].tamanho || "";
+  document.getElementById("buscaItem").value = item + " - V" + versao + " (" + tamanho + ")";
+
+  // Preenche peso
+  quantidade.value = peso || "";
+
+  // Garante que está na tela de movimentação
+  mostrarTela("movimentar");
+
+  fecharResultadoQR();
+
+  // Se tem peso, foca no botão de ação. Se não, foca no campo peso
+  if (peso) {
+    mostrarToast("Dados carregados pelo QR");
+  } else {
+    quantidade.focus();
+    mostrarToast("Item carregado — informe o peso");
+  }
+}
+
+function entradaRapidaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.dados) return;
+
+  let dados = qrLidoAtual.dados;
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let item = dados.item;
+  let versao = String(dados.versao);
+  let peso = parseFloat(dados.peso);
+
+  if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
+    mostrarToast("Item não encontrado no cadastro", "erro");
+    return;
+  }
+
+  if (!peso || peso <= 0) {
+    mostrarToast("Peso inválido no QR", "erro");
+    return;
+  }
+
+  // Verifica se já existe no histórico
+  let registroExistente = localizarRegistroPorQR(dados);
+  if (registroExistente) {
+    let status = "";
+    if (registroExistente._removidaEstoque) status = "excluída";
+    else if (registroExistente.consumida) status = "consumida";
+    else status = "ativa no estoque";
+
+    mostrarToast("Bobina já registrada (" + status + ")", "erro");
+    return;
+  }
+
+  salvarEstadoParaDesfazer();
+
+  let identificador = item + " - V" + versao;
+
+  // Usa o mesmo id do QR para poder localizar depois
+  let idQR = String(dados.id || "").replace("BOB-", "");
+  let idNumerico = idQR ? parseFloat(idQR) : Date.now() + Math.random();
+
+  estoque[identificador] = (estoque[identificador] || 0) + peso;
+  estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
+
+  historico.push({
+    id: idNumerico,
+    data: new Date().toLocaleString(),
+    tipo: "Entrada",
+    item: identificador,
+    qtd: peso
+  });
+
+  ultimoItem = identificador;
+  salvarDados();
+  atualizarTudo();
+
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast(identificador + " adicionado via QR");
+}
+
+function consumirBobinaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.registro) return;
+
+  let reg = qrLidoAtual.registro;
+  let chave = reg.item;
+
+  if (reg.consumida) {
+    mostrarToast("Bobina já consumida", "erro");
+    return;
+  }
+
+  salvarEstadoParaDesfazer();
+
+  reg.consumida = true;
+
+  if (estoque[chave]) {
+    estoque[chave] -= reg.qtd;
+    if (estoque[chave] <= 0) {
+      delete estoque[chave];
+      delete estoque[chave + "_qtd"];
+    } else if (estoque[chave + "_qtd"] > 0) {
+      estoque[chave + "_qtd"]--;
+    }
+  }
+
+  historico.push({
+    id: Date.now() + Math.random(),
+    data: new Date().toLocaleString(),
+    tipo: "Consumo",
+    item: chave,
+    qtd: reg.qtd,
+    refEntradaId: reg.id,
+    refEntradaData: reg.data
+  });
+
+  salvarDados();
+  atualizarTudo();
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast("Bobina consumida via QR");
+}
+
+function desmarcarConsumidaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.registro) return;
+
+  let reg = qrLidoAtual.registro;
+  let chave = reg.item;
+
+  if (!reg.consumida) {
+    mostrarToast("Bobina não está consumida", "erro");
+    return;
+  }
+
+  salvarEstadoParaDesfazer();
+
+  reg.consumida = false;
+
+  estoque[chave] = (estoque[chave] || 0) + reg.qtd;
+  estoque[chave + "_qtd"] = (estoque[chave + "_qtd"] || 0) + 1;
+
+  // Remove registro de consumo correspondente
+  for (let i = historico.length - 1; i >= 0; i--) {
+    if (historico[i].tipo === "Consumo" && historico[i].refEntradaId === reg.id) {
+      historico.splice(i, 1);
+      break;
+    }
+  }
+
+  salvarDados();
+  atualizarTudo();
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast("Consumo desmarcado via QR");
+}
+
+function excluirBobinaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.registro) return;
+
+  let reg = qrLidoAtual.registro;
+  let chave = reg.item;
+
+  if (!confirm("Excluir esta bobina do estoque?")) return;
+
+  salvarEstadoParaDesfazer();
+
+  if (!reg.consumida && estoque[chave]) {
+    estoque[chave] -= reg.qtd;
+    if (estoque[chave + "_qtd"] > 0) estoque[chave + "_qtd"]--;
+    if (estoque[chave] <= 0) {
+      delete estoque[chave];
+      delete estoque[chave + "_qtd"];
+    }
+  }
+
+  reg._removidaEstoque = true;
+
+  historico.push({
+    id: Date.now() + Math.random(),
+    data: new Date().toLocaleString(),
+    tipo: "Exclusão",
+    item: chave,
+    qtd: reg.qtd,
+    refEntradaId: reg.id,
+    refEntradaData: reg.data
+  });
+
+  salvarDados();
+  atualizarTudo();
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  mostrarToast("Bobina excluída via QR");
+}
+
+function fecharResultadoQR() {
+  document.getElementById("modalResultadoQR").classList.add("hidden");
+  qrLidoAtual = null;
+}
+
+window.fecharResultadoQR = fecharResultadoQR;
+window.usarQRNaMovimentacao = usarQRNaMovimentacao;
+window.entradaRapidaQR = entradaRapidaQR;
+window.consumirBobinaQR = consumirBobinaQR;
+window.desmarcarConsumidaQR = desmarcarConsumidaQR;
+window.excluirBobinaQR = excluirBobinaQR;
+window.abrirScannerQR = abrirScannerQR;
+window.fecharScannerQR = fecharScannerQR;
+window.gerarQRBobina = gerarQRBobina;
+window.abrirAcoesHistorico = abrirAcoesHistorico;
+window.fecharModalHistoricoAcoes = fecharModalHistoricoAcoes;
+window.abrirQRDoHistorico = abrirQRDoHistorico;
+window.confirmarRemoverHistoricoSelecionado = confirmarRemoverHistoricoSelecionado;
+window.abrirScannerContinuo = abrirScannerContinuo;
+window.fecharScannerContinuo = fecharScannerContinuo;
+
+/* ================= SCANNER CONTÍNUO ================= */
+
+let leitorContinuo = null;
+let leitorContinuoAberto = false;
+let continuoProcessando = false;
+let continuoContagem = 0;
+let continuoIdsLidos = [];
+
+async function abrirScannerContinuo() {
+  continuoContagem = 0;
+  continuoIdsLidos = [];
+  continuoProcessando = false;
+
+  document.getElementById("modalScannerContinuo").classList.remove("hidden");
+  document.getElementById("continuoContador").textContent = "0 bobinas adicionadas";
+  document.getElementById("continuoLog").innerHTML = "";
+  document.getElementById("readerContinuo").innerHTML = "";
+
+  try {
+    leitorContinuo = new Html5Qrcode("readerContinuo");
+
+    const cameras = await Html5Qrcode.getCameras();
+    if (!cameras || cameras.length === 0) {
+      mostrarToast("Nenhuma câmera encontrada", "erro");
+      fecharScannerContinuo();
+      return;
+    }
+
+    await leitorContinuo.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: { width: 220, height: 220 }
+      },
+      async (decodedText) => {
+        if (continuoProcessando) return;
+        continuoProcessando = true;
+        await processarLeituraContinua(decodedText);
+        // Pequeno delay para não ler o mesmo QR duas vezes
+        setTimeout(() => { continuoProcessando = false; }, 1500);
+      },
+      () => {}
+    );
+
+    leitorContinuoAberto = true;
+  } catch (erro) {
+    console.error(erro);
+    mostrarToast("Não foi possível abrir a câmera", "erro");
+    fecharScannerContinuo();
+  }
+}
+
+async function fecharScannerContinuo() {
+  try {
+    if (leitorContinuo && leitorContinuoAberto) {
+      await leitorContinuo.stop();
+      await leitorContinuo.clear();
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner contínuo:", e);
+  }
+
+  leitorContinuo = null;
+  leitorContinuoAberto = false;
+  continuoProcessando = false;
+
+  document.getElementById("modalScannerContinuo").classList.add("hidden");
+  document.getElementById("readerContinuo").innerHTML = "";
+
+  if (continuoContagem > 0) {
+    atualizarTudo();
+    mostrarToast(continuoContagem + " bobina(s) adicionada(s)");
+  }
+}
+
+async function processarLeituraContinua(textoLido) {
+  let dados = null;
+  let log = document.getElementById("continuoLog");
+  let agora = new Date().toLocaleTimeString();
+
+  try {
+    dados = JSON.parse(textoLido);
+  } catch (erro) {
+    adicionarLogContinuo("⚠️ " + agora + " — QR inválido", "erro");
+    return;
+  }
+
+  // Verifica se já leu esse QR nesta sessão
+  let idQR = dados.id || (dados.item + "-V" + dados.versao + "-" + dados.data);
+  if (continuoIdsLidos.includes(idQR)) {
+    adicionarLogContinuo("⏭️ " + agora + " — " + dados.item + " V" + dados.versao + " — já lido", "duplicado");
+    if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
+    return;
+  }
+
+  // Verifica se existe no cadastro
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let item = dados.item;
+  let versao = String(dados.versao);
+  let peso = parseFloat(dados.peso);
+
+  if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
+    adicionarLogContinuo("❌ " + agora + " — " + item + " V" + versao + " — não cadastrado", "erro");
+    if (navigator.vibrate) navigator.vibrate([200]);
+    return;
+  }
+
+  if (!peso || peso <= 0) {
+    adicionarLogContinuo("❌ " + agora + " — " + item + " V" + versao + " — peso inválido", "erro");
+    if (navigator.vibrate) navigator.vibrate([200]);
+    return;
+  }
+
+  // Verifica se já existe no histórico
+  let registro = localizarRegistroPorQR(dados);
+  if (registro) {
+    adicionarLogContinuo("⚠️ " + agora + " — " + item + " V" + versao + " — já no estoque", "duplicado");
+    if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
+    return;
+  }
+
+  // ENTRADA RÁPIDA
+  salvarEstadoParaDesfazer();
+
+  let identificador = item + " - V" + versao;
+  estoque[identificador] = (estoque[identificador] || 0) + peso;
+  estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
+
+  historico.push({
+    id: Date.now() + Math.random(),
+    data: new Date().toLocaleString(),
+    tipo: "Entrada",
+    item: identificador,
+    qtd: peso
+  });
+
+  ultimoItem = identificador;
+  salvarDados();
+
+  continuoIdsLidos.push(idQR);
+  continuoContagem++;
+
+  document.getElementById("continuoContador").textContent = continuoContagem + " bobina(s) adicionada(s)";
+  adicionarLogContinuo("✅ " + agora + " — " + item + " V" + versao + " — " + Math.round(peso) + "kg", "sucesso");
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+}
+
+function adicionarLogContinuo(texto, tipo) {
+  let log = document.getElementById("continuoLog");
+  let div = document.createElement("div");
+  div.textContent = texto;
+  div.style.padding = "3px 0";
+  div.style.borderBottom = "1px solid #f1f5f9";
+
+  if (tipo === "sucesso") div.style.color = "#16a34a";
+  else if (tipo === "erro") div.style.color = "#dc2626";
+  else if (tipo === "duplicado") div.style.color = "#ca8a04";
+
+  // Insere no topo
+  if (log.firstChild) log.insertBefore(div, log.firstChild);
+  else log.appendChild(div);
+}
+
+function descobrirTipoPorItem(item) {
+  let tipoEncontrado = "";
+  Object.keys(banco).forEach(tipo => {
+    if (banco[tipo] && banco[tipo][item]) tipoEncontrado = tipo;
+  });
+  return tipoEncontrado;
+}
+
+/* ================= EXPORTAR QR CODES ================= */
+
+function coletarBobinasParaQR(dataInicioP, dataFimP) {
+  let bobinas = [];
+
+  historico.forEach((h, index) => {
+    if (h.tipo !== "Entrada") return;
+    if (h._removidaEstoque) return;
+
+    // Filtro por período
+    if (dataInicioP || dataFimP) {
+      let dataISO = h.data.split(",")[0].trim().split("/").reverse().join("-");
+      if (dataInicioP && dataISO < dataInicioP) return;
+      if (dataFimP && dataISO > dataFimP) return;
+    }
+
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0];
+    let versao = partes[1];
+
+    let tipo = "";
+    Object.keys(banco).forEach(t => {
+      if (banco[t] && banco[t][item]) tipo = t;
+    });
+
+    let tamanho = "";
+    if (tipo && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
+      tamanho = banco[tipo][item][versao].tamanho;
+    }
+
+    let idLimpo = "BOB-" + String(Math.floor(h.id));
+    let status = h.consumida ? "consumida" : "ativa";
+
+    bobinas.push({
+      index: index,
+      id: idLimpo,
+      tipo: tipo,
+      tipoNome: nomeCompletoTipo(tipo),
+      item: item,
+      versao: versao,
+      tamanho: tamanho,
+      peso: Math.round(h.qtd),
+      data: h.data,
+      status: status,
+      qrData: JSON.stringify({
+        id: idLimpo,
+        tipo: tipo,
+        item: item,
+        versao: versao,
+        peso: Math.round(h.qtd),
+        data: h.data
+      })
+    });
+  });
+
+  return bobinas;
+}
+
+function exportarQRCodes(dataInicioP, dataFimP) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada para gerar QR", "erro");
+    return;
+  }
+
+  // Abre modal de progresso
+  let modalHTML = `
+    <div class="modal-overlay" id="modalProgressoQR">
+      <div class="modal-content" style="text-align:center; max-width:350px;">
+        <h3 style="margin-bottom:12px;">Gerando QR Codes</h3>
+        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
+        <div class="barra" style="margin:12px 0;">
+          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
+        </div>
+        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
+      </div>
+    </div>
+  `;
+
+  let divModal = document.createElement('div');
+  divModal.innerHTML = modalHTML;
+  document.body.appendChild(divModal.firstElementChild);
+
+  setTimeout(() => {
+    gerarQRCodesEmLote(bobinas);
+  }, 100);
+}
+
+async function gerarQRCodesEmLote(bobinas) {
+  let container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+  document.body.appendChild(container);
+
+  let resultados = [];
+
+  for (let i = 0; i < bobinas.length; i++) {
+    let bob = bobinas[i];
+
+    // Atualiza progresso
+    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
+    let textoEl = document.getElementById('progressoQRTexto');
+    let barraEl = document.getElementById('progressoQRBarra');
+    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
+    if (barraEl) barraEl.style.width = progresso + "%";
+
+    // Cria div temporária para o QR
+    let qrDiv = document.createElement('div');
+    qrDiv.id = 'tempQR_' + i;
+    container.appendChild(qrDiv);
+
+    // Gera QR
+    await new Promise((resolve) => {
+      new QRCode(qrDiv, {
+        text: bob.qrData,
+        width: 300,
+        height: 300,
+        colorDark: "#1e293b",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+      setTimeout(resolve, 50);
+    });
+
+    // Pega a imagem gerada
+    let img = qrDiv.querySelector('img') || qrDiv.querySelector('canvas');
+    let dataUrl = "";
+    if (img && img.tagName === 'IMG') {
+      dataUrl = img.src;
+    } else if (img && img.tagName === 'CANVAS') {
+      dataUrl = img.toDataURL('image/png');
+    }
+
+    resultados.push({
+      ...bob,
+      dataUrl: dataUrl
+    });
+
+    // Permite atualizar a UI
+    await new Promise(r => setTimeout(r, 10));
+  }
+
+  // Remove container temporário
+  container.remove();
+
+  // Remove modal de progresso
+  let modalProgresso = document.getElementById('modalProgressoQR');
+  if (modalProgresso) modalProgresso.remove();
+
+  // Gera o arquivo
+  gerarPDFComQRCodes(resultados);
+}
+
+function gerarPDFComQRCodes(resultados) {
+  if (resultados.length === 0) {
+    mostrarToast("Nenhum QR gerado", "erro");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  const agora = new Date().toLocaleString('pt-BR');
+
+  // Configurações de layout - 3 colunas x 5 linhas = 15 por página
+  const margem = 10;
+  const cols = 3;
+  const linhas = 5;
+  const larguraUtil = 210 - (margem * 2);
+  const alturaUtil = 297 - (margem * 2) - 10; // 10mm para header
+  const larguraCell = larguraUtil / cols;
+  const alturaCell = alturaUtil / linhas;
+  const qrSize = Math.min(larguraCell - 8, alturaCell - 22);
+
+  let pagina = 0;
+
+  for (let i = 0; i < resultados.length; i++) {
+    let posNaPagina = i % (cols * linhas);
+
+    if (posNaPagina === 0) {
+      if (i > 0) doc.addPage();
+      pagina++;
+
+      // Header da página
+      doc.setFillColor(30, 58, 138);
+      doc.rect(0, 0, 210, 10, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('QR Codes — Conferência de Estoques', margem, 7);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Página ' + pagina + ' | ' + agora, 210 - margem, 7, { align: 'right' });
+      doc.setTextColor(0, 0, 0);
+    }
+
+    let col = posNaPagina % cols;
+    let lin = Math.floor(posNaPagina / cols);
+
+    let x = margem + (col * larguraCell);
+    let y = 12 + (lin * alturaCell);
+
+    let bob = resultados[i];
+
+    // Borda do card
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(x + 1, y + 1, larguraCell - 2, alturaCell - 2, 2, 2, 'S');
+
+    // QR Code
+    if (bob.dataUrl) {
+      let qrX = x + (larguraCell - qrSize) / 2;
+      let qrY = y + 3;
+      doc.addImage(bob.dataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
+    }
+
+    // Texto abaixo do QR
+    let textoY = y + qrSize + 5;
+
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.text(bob.item + ' — V' + bob.versao, x + larguraCell / 2, textoY, { align: 'center' });
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'normal');
+    doc.text(bob.tamanho + ' | ' + bob.peso + 'kg', x + larguraCell / 2, textoY + 3.5, { align: 'center' });
+
+    doc.setFontSize(5);
+    doc.setTextColor(120, 120, 120);
+    doc.text(bob.id, x + larguraCell / 2, textoY + 6.5, { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+  }
+
+  doc.save("QR_Codes_" + getTimestamp() + ".pdf");
+  mostrarToast(resultados.length + " QR codes exportados");
+}
+
+// Exportar QR codes individuais como imagens ZIP
+async function exportarQRCodesZIP(dataInicioP, dataFimP) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada", "erro");
+    return;
+  }
+
+  // Abre modal de progresso
+  let modalHTML = `
+    <div class="modal-overlay" id="modalProgressoQR">
+      <div class="modal-content" style="text-align:center; max-width:350px;">
+        <h3 style="margin-bottom:12px;">Gerando imagens QR</h3>
+        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
+        <div class="barra" style="margin:12px 0;">
+          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
+        </div>
+        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
+      </div>
+    </div>
+  `;
+
+  let divModal = document.createElement('div');
+  divModal.innerHTML = modalHTML;
+  document.body.appendChild(divModal.firstElementChild);
+
+  setTimeout(async () => {
+    await gerarImagensQRIndividuais(bobinas);
+  }, 100);
+}
+
+async function gerarImagensQRIndividuais(bobinas) {
+  let container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+  document.body.appendChild(container);
+
+  let arquivos = [];
+
+  for (let i = 0; i < bobinas.length; i++) {
+    let bob = bobinas[i];
+
+    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
+    let textoEl = document.getElementById('progressoQRTexto');
+    let barraEl = document.getElementById('progressoQRBarra');
+    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
+    if (barraEl) barraEl.style.width = progresso + "%";
+
+    // Cria canvas para etiqueta completa
+    let canvas = document.createElement('canvas');
+    let largura = 400;
+    let altura = 500;
+    canvas.width = largura;
+    canvas.height = altura;
+    let ctx = canvas.getContext('2d');
+
+    // Fundo branco
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, largura, altura);
+
+    // Gera QR em div temporária
+    let qrDiv = document.createElement('div');
+    qrDiv.id = 'tempQR_' + i;
+    container.appendChild(qrDiv);
+
+    await new Promise((resolve) => {
+      new QRCode(qrDiv, {
+        text: bob.qrData,
+        width: 300,
+        height: 300,
+        colorDark: "#1e293b",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+      setTimeout(resolve, 80);
+    });
+
+    // Pega imagem do QR
+    let imgEl = qrDiv.querySelector('canvas') || qrDiv.querySelector('img');
+
+    if (imgEl) {
+      let qrX = (largura - 300) / 2;
+      let qrY = 10;
+
+      if (imgEl.tagName === 'CANVAS') {
+        ctx.drawImage(imgEl, qrX, qrY, 300, 300);
+      } else {
+        await new Promise((resolve) => {
+          let tempImg = new Image();
+          tempImg.onload = function () {
+            ctx.drawImage(tempImg, qrX, qrY, 300, 300);
+            resolve();
+          };
+          tempImg.src = imgEl.src;
+        });
+      }
+    }
+
+    // Texto
+    ctx.fillStyle = '#1e293b';
+    ctx.textAlign = 'center';
+
+    ctx.font = 'bold 22px Arial';
+    ctx.fillText(bob.item + ' — V' + bob.versao, largura / 2, 340);
+
+    ctx.font = '18px Arial';
+    ctx.fillText(bob.tamanho + ' | ' + bob.peso + ' kg', largura / 2, 370);
+
+    ctx.font = '14px Arial';
+    ctx.fillStyle = '#64748b';
+    ctx.fillText(bob.id, largura / 2, 395);
+
+    ctx.font = '12px Arial';
+    ctx.fillText(bob.tipoNome, largura / 2, 415);
+
+    // Converte para blob
+    let blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
+    let nomeArquivo = bob.item + "_V" + bob.versao + "_" + bob.peso + "kg_" + bob.id + ".png";
+    nomeArquivo = nomeArquivo.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    arquivos.push({ nome: nomeArquivo, blob: blob });
+
+    await new Promise(r => setTimeout(r, 10));
+  }
+
+  container.remove();
+
+  let modalProgresso = document.getElementById('modalProgressoQR');
+  if (modalProgresso) modalProgresso.remove();
+
+  // Baixa cada imagem individualmente ou em lote
+  if (arquivos.length === 1) {
+    let link = document.createElement('a');
+    link.href = URL.createObjectURL(arquivos[0].blob);
+    link.download = arquivos[0].nome;
+    link.click();
+  } else {
+    // Baixa como múltiplos arquivos com pequeno delay
+    mostrarToast(arquivos.length + " imagens QR sendo baixadas...");
+    for (let i = 0; i < arquivos.length; i++) {
+      let link = document.createElement('a');
+      link.href = URL.createObjectURL(arquivos[i].blob);
+      link.download = arquivos[i].nome;
+      link.click();
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+
+  mostrarToast(arquivos.length + " QR codes exportados como imagens");
+}
+
+window.exportarQRCodes = exportarQRCodes;
+window.exportarQRCodesZIP = exportarQRCodesZIP;
+
+window.ajustarFormatoQR = function() {
+  let tipoDados = document.querySelector('input[name="tipoDados"]:checked');
+  let blocoFormatoQR = document.getElementById("blocoFormatoQR");
+  let blocoFormatoNormal = document.getElementById("blocoFormatoNormal");
+
+  if (!blocoFormatoQR || !blocoFormatoNormal) return;
+
+  if (tipoDados && tipoDados.value === 'qrcodes') {
+    blocoFormatoQR.classList.remove('hidden');
+    blocoFormatoNormal.classList.add('hidden');
+    // Seleciona PDF como padrão para QR
+    let radioPdf = blocoFormatoQR.querySelector('input[value="pdf"]');
+    if (radioPdf) radioPdf.checked = true;
+  } else if (tipoDados && tipoDados.value === 'backup') {
+    blocoFormatoQR.classList.add('hidden');
+    blocoFormatoNormal.classList.add('hidden');
+  } else {
+    blocoFormatoQR.classList.add('hidden');
+    blocoFormatoNormal.classList.remove('hidden');
+  }
+};
