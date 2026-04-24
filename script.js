@@ -1,3 +1,18 @@
+/* ================= TOAST ================= */
+
+function mostrarToast(texto = 'Concluído', tipo = 'sucesso'){
+  let div = document.createElement('div');
+  div.className = 'toast toast-' + tipo;
+  div.textContent = texto;
+  document.body.appendChild(div);
+  setTimeout(function(){
+    div.classList.add('toast-saindo');
+    setTimeout(function(){ if(div.parentNode) div.remove(); }, 300);
+  }, 2700);
+}
+
+/* ================= AUXILIARES FORMATAÇÃO ================= */
+
 function formatarPeso(valor) {
   return Math.round(valor).toLocaleString('pt-BR');
 }
@@ -49,14 +64,12 @@ function registrarExclusaoHistorico(itemChave, qtd, entradaOriginal = null) {
 function excluirItemDoEstoqueComHistorico(itemChave) {
   let alterou = false;
   let pesoAtual = estoque[itemChave] || 0;
-
   let entradasAtivas = historico.filter(h =>
     h.item === itemChave &&
     h.tipo === "Entrada" &&
     !h.consumida &&
     !h._removidaEstoque
   );
-
   if (entradasAtivas.length > 0) {
     entradasAtivas.forEach(h => {
       h._removidaEstoque = true;
@@ -67,13 +80,11 @@ function excluirItemDoEstoqueComHistorico(itemChave) {
     registrarExclusaoHistorico(itemChave, pesoAtual, null);
     alterou = true;
   }
-
   if (Object.prototype.hasOwnProperty.call(estoque, itemChave)) {
     delete estoque[itemChave];
     delete estoque[itemChave + '_qtd'];
     alterou = true;
   }
-
   return alterou;
 }
 
@@ -113,7 +124,7 @@ const barraLaminacao = document.getElementById("barraLaminacao");
 const dataInicio = document.getElementById("dataInicio");
 const dataFim = document.getElementById("dataFim");
 
-const banco = {
+const bancoPadrao = {
   brf: {
     "2000047": {
       "1":  { tamanho: "66 x 60" },
@@ -167,13 +178,15 @@ const banco = {
   }
 };
 
+let banco = {};
+
 /* ================= ESTADO ================= */
 
 let estoque = {};
 let historico = [];
 
 function carregarDados() {
-  carregarBancoCustom();
+  carregarBanco();
   estoque = JSON.parse(localStorage.getItem("estoque")) || {};
   historico = JSON.parse(localStorage.getItem("historico")) || [];
 
@@ -183,6 +196,11 @@ function carregarDados() {
     }
   });
 
+  // Modo escuro persistente
+  if (localStorage.getItem('modoEscuro') === 'true') {
+    document.body.classList.add('dark-mode');
+  }
+
   salvarDados();
   atualizarTabela();
   atualizarHistorico();
@@ -191,6 +209,23 @@ function carregarDados() {
 function salvarDados() {
   localStorage.setItem("estoque", JSON.stringify(estoque));
   localStorage.setItem("historico", JSON.stringify(historico));
+}
+
+/* ================= BANCO NO LOCALSTORAGE (item 18) ================= */
+
+function carregarBanco() {
+  let salvo = localStorage.getItem("bancoCustom");
+  if (salvo) {
+    banco = JSON.parse(salvo);
+  } else {
+    // Primeira vez: copia o banco padrão
+    banco = JSON.parse(JSON.stringify(bancoPadrao));
+    localStorage.setItem("bancoCustom", JSON.stringify(banco));
+  }
+}
+
+function salvarBanco() {
+  localStorage.setItem("bancoCustom", JSON.stringify(banco));
 }
 
 let selecionado = null;
@@ -219,15 +254,14 @@ window.mostrarTela = function(t){
   document.querySelectorAll('.nav-top button').forEach(btn => btn.classList.remove('ativo'));
   document.querySelector(`.nav-top button[onclick="mostrarTela('${t}')"]`).classList.add('ativo');
 
-const btnExpandir = document.getElementById("btnExpandir");
-
-if (t === "movimentar") {
-  btnExpandir.style.visibility = "hidden";
-  btnExpandir.style.pointerEvents = "none";
-} else {
-  btnExpandir.style.visibility = "visible";
-  btnExpandir.style.pointerEvents = "auto";
-}
+  const btnExpandir = document.getElementById("btnExpandir");
+  if (t === "movimentar") {
+    btnExpandir.style.visibility = "hidden";
+    btnExpandir.style.pointerEvents = "none";
+  } else {
+    btnExpandir.style.visibility = "visible";
+    btnExpandir.style.pointerEvents = "auto";
+  }
 
   atualizarTabela();
   atualizarHistorico();
@@ -279,7 +313,7 @@ function atualizarSaldoAtual(item, versao){
   }
   let identificador = item + " - V" + versao;
   let saldo = estoque[identificador] || 0;
-  if(saldoAtual) saldoAtual.innerHTML = "Saldo atual: <strong>" + saldo + " kg</strong>";
+  if(saldoAtual) saldoAtual.innerHTML = "Saldo atual: <strong>" + formatarPeso(saldo) + " kg</strong>";
 }
 
 versaoSelect.addEventListener("change", function(){
@@ -344,19 +378,20 @@ function limparBusca(){
   versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
   quantidade.value = '';
   document.getElementById('buscaItem').value = '';
+  if(saldoAtual) saldoAtual.innerHTML = "";
 }
 
 /* ================= REPETIR ÚLTIMO ================= */
 
 function usarUltimo(){
-  if(!ultimoItem){ alert("Nenhum item"); return; }
-  if(!ultimoItem.includes(" - V")){ alert("Último item não possui versão registrada"); return; }
+  if(!ultimoItem){ mostrarToast('Nenhum item recente', 'erro'); return; }
+  if(!ultimoItem.includes(" - V")){ mostrarToast('Último item sem versão registrada', 'erro'); return; }
   let partes = ultimoItem.split(" - V");
   let item = partes[0];
   let versao = partes[1];
   let tipoEncontrado = null;
   Object.keys(banco).forEach(tipo => { if(banco[tipo][item]) tipoEncontrado = tipo; });
-  if(!tipoEncontrado){ alert("Item não encontrado no banco"); return; }
+  if(!tipoEncontrado){ mostrarToast('Item não encontrado no banco', 'erro'); return; }
   tipoSelect.value = tipoEncontrado;
   filtrarPorTipo();
   itemSelect.value = item;
@@ -371,7 +406,7 @@ function usarUltimo(){
   versaoSelect.value = versao;
   let identificador = item + " - V" + versao;
   let saldo = estoque[identificador] || 0;
-  if(saldoAtual) saldoAtual.innerHTML = "Saldo atual: <strong>" + saldo + " kg</strong>";
+  if(saldoAtual) saldoAtual.innerHTML = "Saldo atual: <strong>" + formatarPeso(saldo) + " kg</strong>";
   let tamanho = "";
   if (banco[tipoEncontrado][item] && banco[tipoEncontrado][item][versao]) {
     tamanho = banco[tipoEncontrado][item][versao].tamanho;
@@ -391,17 +426,17 @@ function movimentar(tipoMov){
   if(!tipo) faltando.push("tipo");
   if(!item) faltando.push("item");
   if(!versao) faltando.push("versão");
-  if(faltando.length > 0){ alert("Insira: " + faltando.join(", ")); return; }
+  if(faltando.length > 0){ mostrarToast("Insira: " + faltando.join(", "), 'erro'); return; }
   let qtd = parseFloat(quantidade.value);
-  if(!qtd){ alert("Informe o peso"); return; }
+  if(!qtd){ mostrarToast("Informe o peso", 'erro'); return; }
   let identificador = item + " - V" + versao;
   if(!estoque[identificador]) estoque[identificador] = 0;
 
   salvarEstadoParaDesfazer();
 
   if(tipoMov === 'remove'){
-    if(!estoque[identificador] || estoque[identificador] <= 0){ alert("Sem saldo"); return; }
-    if(qtd > estoque[identificador]){ alert("Peso maior que o saldo disponível"); return; }
+    if(!estoque[identificador] || estoque[identificador] <= 0){ mostrarToast("Sem saldo disponível", 'erro'); return; }
+    if(qtd > estoque[identificador]){ mostrarToast("Peso maior que o saldo disponível", 'erro'); return; }
     abrirModalSaida(identificador, qtd);
     return;
   } else {
@@ -430,9 +465,10 @@ function movimentar(tipoMov){
   document.getElementById('buscaItem').value = '';
   sugestoes.innerHTML = '';
   sugestoes.classList.add('hidden');
+  if(saldoAtual) saldoAtual.innerHTML = "";
 
   if (navigator.vibrate) navigator.vibrate([100]);
-  alert(identificador + (tipoMov === 'add' ? " Adicionado" : " Removido"));
+  mostrarToast(identificador + (tipoMov === 'add' ? " adicionado" : " removido"));
 }
 
 /* ================= ESTOQUE ================= */
@@ -463,8 +499,9 @@ function ordenarEstoque(coluna) {
 }
 
 function atualizarTabela(){
+  const tabela = document.getElementById('tabela');
   tabela.innerHTML='';
-  let termo = buscaEstoque.value.toLowerCase();
+  let termo = document.getElementById('buscaEstoque').value.toLowerCase();
   let pesoTotal = 0, totalBrf = 0, totalTampas = 0, totalLaminacao = 0;
 
   let dados = Object.keys(estoque)
@@ -529,7 +566,7 @@ function atualizarTabela(){
     });
   }
 
-    if(totalGeralLabel) totalGeralLabel.innerHTML = formatarPeso(pesoTotal) + " kg";
+  if(totalGeralLabel) totalGeralLabel.innerHTML = formatarPeso(pesoTotal) + " kg";
   let totalBobinasLabel = document.getElementById("totalBobinas");
   let totalBobinasCount = dados.reduce((acc, d) => acc + d.qtdEntradas, 0);
   if(totalBobinasLabel) totalBobinasLabel.textContent = totalBobinasCount + " bobinas";
@@ -551,8 +588,9 @@ function atualizarTabela(){
   if (barraTampas) atualizarBarra(barraTampas, percTampas);
   if (barraLaminacao) atualizarBarra(barraLaminacao, percLaminacao);
 
+  let html = '';
   dados.forEach(d=>{
-    tabela.innerHTML += `
+    html += `
       <tr>
         <td>${nomeBonitoTipo(d.tipo)}</td>
         <td>${d.item}</td>
@@ -564,6 +602,7 @@ function atualizarTabela(){
       </tr>
     `;
   });
+  tabela.innerHTML = html;
 }
 
 function remover(item){
@@ -597,7 +636,7 @@ function remover(item){
   atualizarTabela();
   atualizarHistorico();
 
-    mostrarToast('Item removido');
+  mostrarToast('Item removido');
 }
 
 /* ================= HISTÓRICO ================= */
@@ -645,8 +684,9 @@ function ordenarHistorico(coluna) {
 }
 
 function atualizarHistorico(){
+  const historicoTabela = document.getElementById('historicoTabela');
   historicoTabela.innerHTML = '';
-  let termo = normalizarTexto(buscaHistorico.value);
+  let termo = normalizarTexto(document.getElementById('buscaHistorico').value);
 
   let dados = historico.map(h => {
     let partes = h.item.split(" - V");
@@ -661,7 +701,6 @@ function atualizarHistorico(){
     return { original: h, data: h.data.replace(", ", "<br>"), movimentacao: h.tipo, tipo: tipoEncontrado, item, versao, tamanho, qtd: h.qtd };
   }).filter(d => {
     if (!d) return false;
-
     let termosMovimento = [d.original.tipo || '', d.movimentacao || ''];
     if (d.original.tipo === 'Entrada') {
       termosMovimento.push('entrada');
@@ -676,13 +715,12 @@ function atualizarHistorico(){
       if (d.original.consumida) termosMovimento.push('consumo', 'consumida');
       if (d.original.excluida) termosMovimento.push('exclusao', 'exclusão', 'excluida', 'excluída');
     }
-
     let textoCompleto = normalizarTexto(`${d.data} ${termosMovimento.join(' ')} ${nomeBonitoTipo(d.tipo)} ${d.item} ${d.versao} ${d.tamanho} ${d.qtd}`);
     let matchesBusca = textoCompleto.includes(termo);
     let dataISO = d.data.split(",")[0].split("/").reverse().join("-");
     let matchesPeriodo = true;
-    if(dataInicio.value) matchesPeriodo = matchesPeriodo && (dataISO >= dataInicio.value);
-    if(dataFim.value) matchesPeriodo = matchesPeriodo && (dataISO <= dataFim.value);
+    if(dataInicio && dataInicio.value) matchesPeriodo = matchesPeriodo && (dataISO >= dataInicio.value);
+    if(dataFim && dataFim.value) matchesPeriodo = matchesPeriodo && (dataISO <= dataFim.value);
     return matchesBusca && matchesPeriodo;
   });
 
@@ -742,6 +780,7 @@ function atualizarHistorico(){
     });
   }
 
+  let html = '';
   dados.forEach(d => {
     let indexReal = historico.indexOf(d.original);
     let corLinha = '', movTexto = '', refTexto = '';
@@ -790,7 +829,7 @@ function atualizarHistorico(){
         break;
     }
 
-    historicoTabela.innerHTML += `
+    html += `
       <tr class="${corLinha}">
         <td>${d.data}</td>
         <td>${movTexto}${refTexto}</td>
@@ -801,59 +840,13 @@ function atualizarHistorico(){
       </tr>
     `;
   });
+  historicoTabela.innerHTML = html;
 }
 
-/* ================= TOAST ================= */
-
-function mostrarToast(texto = 'Concluído'){
-  let div = document.createElement('div');
-  div.className = 'toast';
-  div.textContent = texto;
-  document.body.appendChild(div);
-
-  setTimeout(function(){
-    if (div.parentNode) div.remove();
-  }, 3000);
-}
-
-function criarSnapshotEstado() {
-  return {
-    estoque: JSON.parse(JSON.stringify(estoque)),
-    historico: JSON.parse(JSON.stringify(historico))
-  };
-}
-
-function restaurarSnapshotEstado(snapshot) {
-  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
-  historico = JSON.parse(JSON.stringify(snapshot.historico));
-
-  salvarDados();
-  atualizarTabela();
-  atualizarHistorico();
-
-  if (tipoDetalheAtual) {
-    atualizarDetalhes();
-  }
-}
-
-/* ================= FILTRO LIMPAR ================= */
-
-document.addEventListener("DOMContentLoaded", function(){
-  const btnLimparFiltro = document.getElementById("btnLimparFiltro");
-  if(btnLimparFiltro){
-    btnLimparFiltro.addEventListener("click", function(){
-      dataInicio.value = "";
-      dataFim.value = "";
-      document.getElementById("buscaHistorico").value = "";
-      atualizarHistorico();
-    });
-  }
-});
-
-/* ================= EXPORTAÇÃO ================= */
+/* ================= EXPORTAÇÃO EXCEL ================= */
 
 function exportarParaExcel(nomeArquivo, dados){
-  if(dados.length === 0){ alert("Nenhum dado para exportar!"); return; }
+  if(dados.length === 0){ mostrarToast("Nenhum dado para exportar!", 'erro'); return; }
   let tabela = "<table border='1'><tr>";
   Object.keys(dados[0]).forEach(chave=>{ tabela += "<th>" + chave + "</th>"; });
   tabela += "</tr>";
@@ -900,15 +893,24 @@ window.executarExportacao = function(){
   const radioPeriodo = document.querySelector('input[name="tipoPeriodo"]:checked');
   if (!radioDados || !radioPeriodo) return;
   const tipoDados = radioDados.value, tipoPeriodo = radioPeriodo.value;
-  let dataInicio = null, dataFim = null;
+  let dataInicioExp = null, dataFimExp = null;
   if (tipoPeriodo === 'periodo') {
-    dataInicio = document.getElementById("exportDataInicio").value;
-    dataFim = document.getElementById("exportDataFim").value;
+    dataInicioExp = document.getElementById("exportDataInicio").value;
+    dataFimExp = document.getElementById("exportDataFim").value;
   }
-  if (tipoDados === 'estoque') exportarEstoque(dataInicio, dataFim);
-  if (tipoDados === 'historico') exportarHistorico(dataInicio, dataFim);
-  if (tipoDados === 'ambos') exportarAmbos(dataInicio, dataFim);
-  if (tipoDados === 'backup') exportarBackup();
+  const formatoSelecionado = document.querySelector('input[name="formatoExport"]:checked');
+  const formato = formatoSelecionado ? formatoSelecionado.value : 'excel';
+
+  if (formato === 'pdf') {
+    if (tipoDados === 'estoque') exportarEstoquePDF(dataInicioExp, dataFimExp);
+    if (tipoDados === 'historico') exportarHistoricoPDF(dataInicioExp, dataFimExp);
+    if (tipoDados === 'ambos') { exportarEstoquePDF(dataInicioExp, dataFimExp); exportarHistoricoPDF(dataInicioExp, dataFimExp); }
+  } else {
+    if (tipoDados === 'estoque') exportarEstoque(dataInicioExp, dataFimExp);
+    if (tipoDados === 'historico') exportarHistorico(dataInicioExp, dataFimExp);
+    if (tipoDados === 'ambos') exportarAmbos(dataInicioExp, dataFimExp);
+    if (tipoDados === 'backup') exportarBackup();
+  }
   fecharModalConfig();
 }
 
@@ -917,7 +919,7 @@ function getTimestamp(){
   return agora.getFullYear() + "-" + String(agora.getMonth()+1).padStart(2,"0") + "-" + String(agora.getDate()).padStart(2,"0") + "_" + String(agora.getHours()).padStart(2,"0") + "-" + String(agora.getMinutes()).padStart(2,"0");
 }
 
-function exportarEstoque(dataInicio, dataFim){
+function exportarEstoque(dataInicioP, dataFimP){
   const wb = XLSX.utils.book_new();
   let dadosEstoque = [];
   Object.keys(estoque).forEach(chave => {
@@ -938,12 +940,12 @@ function exportarEstoque(dataInicio, dataFim){
   XLSX.writeFile(wb, "Estoque_" + getTimestamp() + ".xlsx");
 }
 
-function exportarHistorico(dataInicio, dataFim){
+function exportarHistorico(dataInicioP, dataFimP){
   const wb = XLSX.utils.book_new();
   let dadosHistorico = historico.filter(h => {
-    if(!dataInicio && !dataFim) return true;
+    if(!dataInicioP && !dataFimP) return true;
     let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
-    return (!dataInicio || dataISO >= dataInicio) && (!dataFim || dataISO <= dataFim);
+    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
   }).map(h => {
     let partes = h.item.split(" - V");
     if (partes.length < 2) return null;
@@ -952,16 +954,17 @@ function exportarHistorico(dataInicio, dataFim){
     Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
     if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
     let tamanho = banco[tipoInterno][item][versao].tamanho;
-    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd };
+    let ref = h.refEntradaData || '';
+    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd, Ref: ref };
   }).filter(d => d !== null);
   const wsHistorico = XLSX.utils.json_to_sheet(dadosHistorico);
   wsHistorico['!autofilter'] = { ref: wsHistorico['!ref'] };
-  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }];
+  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
   XLSX.utils.book_append_sheet(wb, wsHistorico, "Histórico");
   XLSX.writeFile(wb, "Historico_" + getTimestamp() + ".xlsx");
 }
 
-function exportarAmbos(dataInicio, dataFim){
+function exportarAmbos(dataInicioP, dataFimP){
   const wb = XLSX.utils.book_new();
   let dadosEstoque = [];
   Object.keys(estoque).forEach(chave => {
@@ -981,9 +984,9 @@ function exportarAmbos(dataInicio, dataFim){
   XLSX.utils.book_append_sheet(wb, wsEstoque, "Estoque");
 
   let dadosHistorico = historico.filter(h => {
-    if(!dataInicio && !dataFim) return true;
+    if(!dataInicioP && !dataFimP) return true;
     let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
-    return (!dataInicio || dataISO >= dataInicio) && (!dataFim || dataISO <= dataFim);
+    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
   }).map(h => {
     let partes = h.item.split(" - V");
     if (partes.length < 2) return null;
@@ -992,17 +995,124 @@ function exportarAmbos(dataInicio, dataFim){
     Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
     if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
     let tamanho = banco[tipoInterno][item][versao].tamanho;
-    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd };
+    let ref = h.refEntradaData || '';
+    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd, Ref: ref };
   }).filter(d => d !== null);
   const wsHistorico = XLSX.utils.json_to_sheet(dadosHistorico);
-  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }];
+  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
   XLSX.utils.book_append_sheet(wb, wsHistorico, "Histórico");
-  XLSX.writeFile(wb, "Estoque_" + getTimestamp() + ".xlsx");
+  XLSX.writeFile(wb, "Estoque_Historico_" + getTimestamp() + ".xlsx");
+}
+
+/* ================= EXPORTAÇÃO PDF ================= */
+
+function exportarEstoquePDF(dataInicioP, dataFimP) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const agora = new Date().toLocaleString('pt-BR');
+
+  doc.setFillColor(30, 58, 138);
+  doc.rect(0, 0, doc.internal.pageSize.width, 18, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Conferência de Estoques — Estoque', 14, 12);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Gerado em: ' + agora, doc.internal.pageSize.width - 14, 12, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
+
+  let dadosEstoque = [];
+  Object.keys(estoque).forEach(chave => {
+    if (chave.endsWith('_qtd')) return;
+    let partes = chave.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    dadosEstoque.push([nomeBonitoTipo(tipoInterno), item, versao, tamanho, String(estoque[chave])]);
+  });
+
+  if (dadosEstoque.length === 0) { mostrarToast('Nenhum dado para exportar', 'erro'); return; }
+
+  doc.autoTable({
+    startY: 22,
+    head: [['Tipo', 'Item', 'Versão', 'Medidas', 'Kg']],
+    body: dadosEstoque,
+    styles: { fontSize: 9, cellPadding: 3 },
+    headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [240, 244, 255] },
+    columnStyles: {
+      0: { cellWidth: 25 },
+      1: { cellWidth: 35 },
+      2: { cellWidth: 20 },
+      3: { cellWidth: 35 },
+      4: { cellWidth: 20 }
+    }
+  });
+
+  doc.save("Estoque_" + getTimestamp() + ".pdf");
+}
+
+function exportarHistoricoPDF(dataInicioP, dataFimP) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const agora = new Date().toLocaleString('pt-BR');
+
+  doc.setFillColor(30, 58, 138);
+  doc.rect(0, 0, doc.internal.pageSize.width, 18, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Conferência de Estoques — Histórico', 14, 12);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Gerado em: ' + agora, doc.internal.pageSize.width - 14, 12, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
+
+  let dadosHistorico = historico.filter(h => {
+    if (!dataInicioP && !dataFimP) return true;
+    let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
+    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
+  }).map(h => {
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return null;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    let ref = h.refEntradaData || '';
+    return [h.data, h.tipo, nomeBonitoTipo(tipoInterno), item, versao, tamanho, String(h.qtd), ref];
+  }).filter(d => d !== null);
+
+  if (dadosHistorico.length === 0) { mostrarToast('Nenhum dado para exportar', 'erro'); return; }
+
+  doc.autoTable({
+    startY: 22,
+    head: [['Data', 'Movimentação', 'Tipo', 'Item', 'Versão', 'Medidas', 'Kg', 'Ref']],
+    body: dadosHistorico,
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [240, 244, 255] },
+    columnStyles: {
+      0: { cellWidth: 34 },
+      1: { cellWidth: 26 },
+      2: { cellWidth: 16 },
+      3: { cellWidth: 26 },
+      4: { cellWidth: 14 },
+      5: { cellWidth: 24 },
+      6: { cellWidth: 14 },
+      7: { cellWidth: 34 }
+    }
+  });
+
+  doc.save("Historico_" + getTimestamp() + ".pdf");
 }
 
 /* ================= MODO VISUALIZAÇÃO ================= */
-
-window.onload = function() { mostrarTela('movimentar'); };
 
 function alternarModoVisualizacao() {
   const telaEstoque = !document.getElementById("estoque").classList.contains("hidden");
@@ -1215,7 +1325,7 @@ function toggleGrupo(id) {
 /* ================= BACKUP ================= */
 
 function exportarBackup() {
-  const dados = { estoque, historico, dataBackup: new Date().toLocaleString() };
+  const dados = { estoque, historico, banco, dataBackup: new Date().toLocaleString() };
   const blob = new Blob([JSON.stringify(dados, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
@@ -1228,37 +1338,30 @@ function importarBackup() { document.getElementById('inputBackup').click(); }
 function processarBackup(event) {
   const arquivo = event.target.files[0];
   if (!arquivo) return;
-
   const leitor = new FileReader();
-
   leitor.onload = function (e) {
     try {
       const dados = JSON.parse(e.target.result);
-
       if (!dados.estoque || !dados.historico) {
-        alert("Arquivo de backup inválido!");
+        mostrarToast('Arquivo de backup inválido!', 'erro');
         return;
       }
-
-      if (!confirm("Isso vai substituir TODOS os dados atuais pelo backup.\n\nData do backup: " + (dados.dataBackup || "desconhecida") + "\n\nDeseja continuar?")) {
-        return;
-      }
-
+      if (!confirm("Isso vai substituir TODOS os dados atuais pelo backup.\n\nData do backup: " + (dados.dataBackup || "desconhecida") + "\n\nDeseja continuar?")) return;
       estoque = dados.estoque;
       historico = dados.historico;
-
+      if (dados.banco) {
+        banco = dados.banco;
+        salvarBanco();
+      }
       salvarDados();
       atualizarTabela();
       atualizarHistorico();
-
-      alert("Backup restaurado com sucesso!");
+      mostrarToast('Backup restaurado com sucesso!');
       fecharModalConfig();
-
     } catch (erro) {
-      alert("Erro ao ler o arquivo de backup!");
+      mostrarToast('Erro ao ler o arquivo de backup!', 'erro');
     }
   };
-
   leitor.readAsText(arquivo);
   event.target.value = "";
 }
@@ -1332,7 +1435,7 @@ function editarBobina() {
   let novoPeso = prompt("Novo peso (kg):", reg.qtd);
   if (novoPeso === null) return;
   novoPeso = parseFloat(novoPeso);
-  if (isNaN(novoPeso) || novoPeso <= 0) { alert("Peso inválido"); return; }
+  if (isNaN(novoPeso) || novoPeso <= 0) { mostrarToast('Peso inválido', 'erro'); return; }
   let diferenca = novoPeso - reg.qtd;
   reg.qtd = novoPeso;
   if (!reg.consumida && estoque[opcaoAtual.chave]) {
@@ -1342,6 +1445,7 @@ function editarBobina() {
   salvarDados();
   atualizarTudo();
   fecharModalOpcoes();
+  mostrarToast('Peso atualizado');
 }
 
 function consumirBobina() {
@@ -1349,21 +1453,18 @@ function consumirBobina() {
   if (opcaoAtual.tipo === 'bobina') {
     let reg = historico[opcaoAtual.indexHistorico];
     if (!reg) return;
-    let backupChave = opcaoAtual.chave;
-
     if (reg.consumida) {
       reg.consumida = false;
       if (estoque[opcaoAtual.chave]) estoque[opcaoAtual.chave] += reg.qtd;
       else estoque[opcaoAtual.chave] = reg.qtd;
       if (!estoque[opcaoAtual.chave + '_qtd']) estoque[opcaoAtual.chave + '_qtd'] = 0;
       estoque[opcaoAtual.chave + '_qtd']++;
-      let regConsumoRemovido = null;
       for (let i = historico.length - 1; i >= 0; i--) {
         if (historico[i].tipo === 'Consumo' && historico[i].refEntradaId === reg.id) {
-          regConsumoRemovido = historico[i]; historico.splice(i, 1); break;
+          historico.splice(i, 1); break;
         }
       }
-            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
       mostrarToast('Consumo desmarcado');
     } else {
       reg.consumida = true;
@@ -1374,40 +1475,33 @@ function consumirBobina() {
       }
       let regConsumo = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
       historico.push(regConsumo);
-            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
       mostrarToast('Bobina consumida');
     }
   } else if (opcaoAtual.tipo === 'item') {
     let entradas = historico.filter(h => h.item === opcaoAtual.chave && h.tipo === "Entrada");
     let todasConsumidas = entradas.every(h => h.consumida);
-    let backupChave = opcaoAtual.chave;
-    let backupEstoque = estoque[opcaoAtual.chave] || 0;
-    let backupQtd = estoque[opcaoAtual.chave+'_qtd'] || 0;
-    let consumosCriados = [], consumosRemovidos = [], entradasAlteradas = [];
-
     if (todasConsumidas) {
       entradas.filter(h => h.consumida).forEach(h => {
-        h.consumida = false; entradasAlteradas.push(h);
+        h.consumida = false;
         if (estoque[opcaoAtual.chave]) estoque[opcaoAtual.chave] += h.qtd;
         else estoque[opcaoAtual.chave] = h.qtd;
       });
       for (let i = historico.length-1; i >= 0; i--) {
-        if (historico[i].tipo === 'Consumo' && historico[i].item === opcaoAtual.chave) {
-          consumosRemovidos.push(historico[i]); historico.splice(i, 1);
-        }
+        if (historico[i].tipo === 'Consumo' && historico[i].item === opcaoAtual.chave) historico.splice(i, 1);
       }
-            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
       mostrarToast('Consumo desmarcado');
     } else {
       entradas.forEach(h => {
         if (!h.consumida) {
-          h.consumida = true; entradasAlteradas.push(h);
+          h.consumida = true;
           if (estoque[opcaoAtual.chave]) { estoque[opcaoAtual.chave] -= h.qtd; if (estoque[opcaoAtual.chave] <= 0) delete estoque[opcaoAtual.chave]; }
           let regConsumo = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
-          historico.push(regConsumo); consumosCriados.push(regConsumo);
+          historico.push(regConsumo);
         }
       });
-            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
       mostrarToast('Todas consumidas');
     }
   }
@@ -1421,7 +1515,6 @@ window.excluirBobina = function() {
     if (!confirm("Remover esta bobina?")) return;
     let reg = historico[opcaoAtual.indexHistorico];
     if (!reg) return;
-    let backupChave = opcaoAtual.chave, backupQtd = reg.qtd, backupConsumida = reg.consumida;
     if (!reg.consumida && estoque[opcaoAtual.chave]) {
       estoque[opcaoAtual.chave] -= reg.qtd;
       if (estoque[opcaoAtual.chave+'_qtd'] > 0) estoque[opcaoAtual.chave+'_qtd']--;
@@ -1430,19 +1523,17 @@ window.excluirBobina = function() {
     reg._removidaEstoque = true;
     let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
     historico.push(regExclusao);
-        salvarDados(); atualizarTudo(); fecharModalOpcoes();
+    salvarDados(); atualizarTudo(); fecharModalOpcoes();
     mostrarToast('Bobina excluída');
   } else if (opcaoAtual.tipo === 'item') {
     if (!confirm("Remover TODAS as bobinas de " + opcaoAtual.chave + "?")) return;
-    let backupChave = opcaoAtual.chave, backupEstoque = estoque[opcaoAtual.chave]||0, backupQtd = estoque[opcaoAtual.chave+'_qtd']||0;
-    let entradasAfetadas = [], exclusoesCriadas = [];
     historico.filter(h => h.item===opcaoAtual.chave && h.tipo==="Entrada" && !h.consumida && !h._removidaEstoque).forEach(h => {
-      h._removidaEstoque = true; entradasAfetadas.push(h);
+      h._removidaEstoque = true;
       let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
-      historico.push(regExclusao); exclusoesCriadas.push(regExclusao);
+      historico.push(regExclusao);
     });
     delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd'];
-        salvarDados(); atualizarTudo(); fecharModalOpcoes();
+    salvarDados(); atualizarTudo(); fecharModalOpcoes();
     mostrarToast('Bobinas excluídas');
   }
 }
@@ -1452,15 +1543,14 @@ window.excluirBobina = function() {
 window.excluirConsumidas = function() {
   salvarEstadoParaDesfazer();
   if (!confirm("Remover todas as bobinas consumidas de " + opcaoAtual.chave + "?")) return;
-  let entradasAfetadas = [], exclusoesCriadas = [];
   historico.forEach(h => {
     if (h.item===opcaoAtual.chave && h.tipo==="Entrada" && h.consumida && !h._removidaEstoque) {
-      h._removidaEstoque = true; entradasAfetadas.push(h);
+      h._removidaEstoque = true;
       let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
-      historico.push(regExclusao); exclusoesCriadas.push(regExclusao);
+      historico.push(regExclusao);
     }
   });
-   salvarDados(); atualizarTudo(); fecharModalOpcoes();
+  salvarDados(); atualizarTudo(); fecharModalOpcoes();
   mostrarToast('Consumidas excluídas');
 }
 
@@ -1511,25 +1601,26 @@ function abrirModalSaida(identificador, pesoSaida) {
 function renderizarBobinasSaida() {
   let tbody = document.getElementById('modalSaidaBody');
   tbody.innerHTML = '';
+  let html = '';
   saidaAtual.bobinas.forEach((bob, idx) => {
     let indexReal = historico.indexOf(bob);
     let desconto = saidaAtual.descontos[indexReal] || 0;
     let pesoAtualBob = bob.qtd - desconto;
     let jaSelecionada = desconto > 0;
     let zerada = saidaAtual.zeradas.includes(indexReal);
-    let tr = document.createElement('tr');
-    if (zerada) tr.className = 'bobina-descontada';
-    else if (jaSelecionada) tr.className = 'bobina-selecionada';
+    let classe = zerada ? 'bobina-descontada' : (jaSelecionada ? 'bobina-selecionada' : '');
     let checado = jaSelecionada ? 'checked' : '';
     let desabilitado = (saidaAtual.pesoRestante <= 0 && !jaSelecionada) ? 'disabled' : '';
-    tr.innerHTML = `
-      <td><input type="radio" ${checado} ${desabilitado} onclick="selecionarBobinaSaida(${indexReal})" style="width:16px;height:16px;margin:0;cursor:pointer;"></td>
-      <td><strong>${idx+1}</strong></td>
-      <td style="font-size:11px;">${bob.data}</td>
-      <td><strong>${Math.round(pesoAtualBob)}</strong></td>
+    html += `
+      <tr class="${classe}">
+        <td><input type="radio" ${checado} ${desabilitado} onclick="selecionarBobinaSaida(${indexReal})" style="width:16px;height:16px;margin:0;cursor:pointer;"></td>
+        <td><strong>${idx+1}</strong></td>
+        <td style="font-size:11px;">${bob.data}</td>
+        <td><strong>${Math.round(pesoAtualBob)}</strong></td>
+      </tr>
     `;
-    tbody.appendChild(tr);
   });
+  tbody.innerHTML = html;
   document.getElementById('modalSaidaRestante').textContent = 'Restante: ' + Math.round(saidaAtual.pesoRestante) + ' kg';
 }
 
@@ -1559,8 +1650,8 @@ function selecionarBobinaSaida(indexReal) {
 
 function confirmarSaida() {
   let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a+b, 0);
-  if (totalDescontado <= 0) { alert("Selecione pelo menos uma bobina"); return; }
-  if (saidaAtual.pesoRestante > 0) { alert("Ainda restam " + Math.round(saidaAtual.pesoRestante) + " kg para descontar"); return; }
+  if (totalDescontado <= 0) { mostrarToast('Selecione pelo menos uma bobina', 'erro'); return; }
+  if (saidaAtual.pesoRestante > 0) { mostrarToast('Ainda restam ' + Math.round(saidaAtual.pesoRestante) + ' kg para descontar', 'erro'); return; }
   if (saidaAtual.zeradas.length > 0) processarZeradas(0);
   else finalizarSaida();
 }
@@ -1587,7 +1678,6 @@ function zerouExcluir() {
 
 function finalizarSaida() {
   salvarEstadoParaDesfazer();
-  let snapshotAntesSaida = criarSnapshotEstado();
   let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a+b, 0);
   let bobsConsumidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._consumir);
   let bobsExcluidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._excluir);
@@ -1662,14 +1752,12 @@ function finalizarSaida() {
   versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
   quantidade.value = '';
   document.getElementById('buscaItem').value = '';
-    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-
-    if (bobsExcluidas.length > 0) {
-    mostrarToast('Saída aplicada');
-  }
+  if(saldoAtual) saldoAtual.innerHTML = "";
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  mostrarToast('Saída aplicada');
 
   setTimeout(function() {
-    alert(mensagemFinal);
+    if (mensagemFinal) alert(mensagemFinal);
   }, 150);
 }
 
@@ -1695,26 +1783,18 @@ function configurarLongPress(botao, callback, tempo = 3000) {
 
 document.addEventListener("DOMContentLoaded", function() {
 
-    let btnEstoque = document.getElementById('btnLimparEstoque');
+  let btnEstoque = document.getElementById('btnLimparEstoque');
   configurarLongPress(btnEstoque, function() {
     if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o estoque?\n\nAs exclusões serão registradas no histórico.")) return;
-
-    let snapshot = criarSnapshotEstado();
-        salvarEstadoParaDesfazer();
+    salvarEstadoParaDesfazer();
     let alterou = excluirTodoEstoqueComHistorico();
-
     salvarDados();
     atualizarTabela();
     atualizarHistorico();
-
     if (tipoDetalheAtual) atualizarDetalhes();
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-
-        if (alterou) {
-      mostrarToast('Estoque excluído');
-    } else {
-      alert("Nenhum item no estoque para excluir.");
-    }
+    if (alterou) mostrarToast('Estoque excluído');
+    else mostrarToast('Nenhum item no estoque', 'erro');
   });
 
   let btnHistorico = document.getElementById('btnLimparHistorico');
@@ -1723,45 +1803,34 @@ document.addEventListener("DOMContentLoaded", function() {
     historico = historico.filter(h => h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque && estoque[h.item] > 0);
     salvarDados(); atualizarHistorico();
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    alert("Histórico limpo!");
+    mostrarToast('Histórico limpo');
   });
 
-    let btnDetalhes = document.getElementById('btnLimparDetalhes');
+  let btnDetalhes = document.getElementById('btnLimparDetalhes');
   configurarLongPress(btnDetalhes, function() {
     if (!tipoDetalheAtual) return;
-
     let nomeTipo = nomeCompletoTipo(tipoDetalheAtual);
-
     if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir todo o estoque de " + nomeTipo + "?\n\nAs exclusões serão registradas no histórico.")) return;
-
-    let snapshot = criarSnapshotEstado();
-        salvarEstadoParaDesfazer();
+    salvarEstadoParaDesfazer();
     let alterou = excluirEstoquePorTipoComHistorico(tipoDetalheAtual);
-
     salvarDados();
     atualizarTabela();
     atualizarHistorico();
     atualizarDetalhes();
-
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-
-        if (alterou) {
-      mostrarToast(nomeTipo + ' excluído');
-    } else {
-      alert("Nenhum item de " + nomeTipo + " no estoque.");
-    }
+    if (alterou) mostrarToast(nomeTipo + ' excluído');
+    else mostrarToast('Nenhum item de ' + nomeTipo, 'erro');
   });
 
   let btnLimparFiltro = document.getElementById("btnLimparFiltro");
   if(btnLimparFiltro){
     btnLimparFiltro.addEventListener("click", function(){
-      dataInicio.value = "";
-      dataFim.value = "";
+      document.getElementById("dataInicio").value = "";
+      document.getElementById("dataFim").value = "";
       document.getElementById("buscaHistorico").value = "";
       atualizarHistorico();
     });
   }
-
 });
 
 /* ================= REMOVER HISTÓRICO ================= */
@@ -1770,16 +1839,15 @@ window.removerHistorico = function(i){
   let registro = historico[i];
   if (!registro) return;
   if (registro.tipo === "Entrada" && !registro.consumida && !registro._removidaEstoque && estoque[registro.item] && estoque[registro.item] > 0) {
-    alert("Não é possível excluir uma entrada que ainda compõe o estoque.");
+    mostrarToast('Não é possível excluir uma entrada ativa no estoque', 'erro');
     return;
   }
   if(!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
- salvarEstadoParaDesfazer();
-  backup = { tipo: 'historico', index: i, valor: historico[i] };
+  salvarEstadoParaDesfazer();
   historico.splice(i, 1);
   salvarDados();
   atualizarHistorico();
-    mostrarToast('Registro removido');
+  mostrarToast('Registro removido');
 };
 
 /* ================= MENU CONFIGURAÇÕES ================= */
@@ -1818,7 +1886,7 @@ window.alternarModoEscuro = function() {
   localStorage.setItem('modoEscuro', document.body.classList.contains('dark-mode'));
 };
 
-/* ================= SISTEMA DE DESFAZER / REFAZER (10 NÍVEIS) ================= */
+/* ================= SISTEMA DE DESFAZER / REFAZER ================= */
 
 let pilhaDesfazer = [];
 let pilhaRefazer = [];
@@ -1829,122 +1897,59 @@ function salvarEstadoParaDesfazer() {
     estoque: JSON.parse(JSON.stringify(estoque)),
     historico: JSON.parse(JSON.stringify(historico))
   };
-
   pilhaDesfazer.push(snapshot);
-
-  if (pilhaDesfazer.length > MAX_DESFAZER) {
-    pilhaDesfazer.shift();
-  }
-
-  // Nova ação limpa o refazer
+  if (pilhaDesfazer.length > MAX_DESFAZER) pilhaDesfazer.shift();
   pilhaRefazer = [];
-
   atualizarBotoesDesfazerRefazer();
 }
 
 window.desfazerAcao = function() {
   if (pilhaDesfazer.length === 0) return;
-
-  // Salva estado atual no refazer
   pilhaRefazer.push({
     estoque: JSON.parse(JSON.stringify(estoque)),
     historico: JSON.parse(JSON.stringify(historico))
   });
-
-  if (pilhaRefazer.length > MAX_DESFAZER) {
-    pilhaRefazer.shift();
-  }
-
+  if (pilhaRefazer.length > MAX_DESFAZER) pilhaRefazer.shift();
   let snapshot = pilhaDesfazer.pop();
-
   estoque = JSON.parse(JSON.stringify(snapshot.estoque));
   historico = JSON.parse(JSON.stringify(snapshot.historico));
-
   salvarDados();
   atualizarTudo();
   atualizarBotoesDesfazerRefazer();
-
   if (navigator.vibrate) navigator.vibrate([50]);
 };
 
 window.refazerAcao = function() {
   if (pilhaRefazer.length === 0) return;
-
-  // Salva estado atual no desfazer
   pilhaDesfazer.push({
     estoque: JSON.parse(JSON.stringify(estoque)),
     historico: JSON.parse(JSON.stringify(historico))
   });
-
-  if (pilhaDesfazer.length > MAX_DESFAZER) {
-    pilhaDesfazer.shift();
-  }
-
+  if (pilhaDesfazer.length > MAX_DESFAZER) pilhaDesfazer.shift();
   let snapshot = pilhaRefazer.pop();
-
   estoque = JSON.parse(JSON.stringify(snapshot.estoque));
   historico = JSON.parse(JSON.stringify(snapshot.historico));
-
   salvarDados();
   atualizarTudo();
   atualizarBotoesDesfazerRefazer();
-
   if (navigator.vibrate) navigator.vibrate([50]);
 };
 
 function atualizarBotoesDesfazerRefazer() {
   let btnUndo = document.getElementById('btnDesfazer');
   let btnRedo = document.getElementById('btnRefazer');
-
   if (btnUndo) {
-    if (pilhaDesfazer.length > 0) {
-      btnUndo.classList.add('ativo');
-      btnUndo.title = 'Desfazer (' + pilhaDesfazer.length + ')';
-    } else {
-      btnUndo.classList.remove('ativo');
-      btnUndo.title = 'Nada para desfazer';
-    }
+    if (pilhaDesfazer.length > 0) { btnUndo.classList.add('ativo'); btnUndo.title = 'Desfazer (' + pilhaDesfazer.length + ')'; }
+    else { btnUndo.classList.remove('ativo'); btnUndo.title = 'Nada para desfazer'; }
   }
-
   if (btnRedo) {
-    if (pilhaRefazer.length > 0) {
-      btnRedo.classList.add('ativo');
-      btnRedo.title = 'Refazer (' + pilhaRefazer.length + ')';
-    } else {
-      btnRedo.classList.remove('ativo');
-      btnRedo.title = 'Nada para refazer';
-    }
+    if (pilhaRefazer.length > 0) { btnRedo.classList.add('ativo'); btnRedo.title = 'Refazer (' + pilhaRefazer.length + ')'; }
+    else { btnRedo.classList.remove('ativo'); btnRedo.title = 'Nada para refazer'; }
   }
 }
 
 /* ================= GERENCIAR CADASTRO ================= */
 
-// Salvar banco customizado no localStorage
-function salvarBanco() {
-  localStorage.setItem("bancoCustom", JSON.stringify(banco));
-}
-
-// Carregar banco customizado do localStorage
-function carregarBancoCustom() {
-  let salvo = localStorage.getItem("bancoCustom");
-  if (salvo) {
-    let parsed = JSON.parse(salvo);
-    Object.keys(parsed).forEach(tipo => {
-      if (!banco[tipo]) banco[tipo] = {};
-      Object.keys(parsed[tipo]).forEach(item => {
-        banco[tipo][item] = parsed[tipo][item];
-      });
-    });
-    Object.keys(banco).forEach(tipo => {
-      if (!parsed[tipo]) { delete banco[tipo]; return; }
-      Object.keys(banco[tipo]).forEach(item => {
-        if (!parsed[tipo][item]) delete banco[tipo][item];
-      });
-    });
-  }
-}
-
-// Abrir tela de cadastro
 window.abrirConfigCadastro = function() {
   document.getElementById('configTitulo').textContent = 'Gerenciar cadastro';
   document.getElementById('configMenuPrincipal').classList.add('hidden');
@@ -1952,22 +1957,15 @@ window.abrirConfigCadastro = function() {
   renderizarCadastro();
 };
 
-// Renderizar acordeão completo
 function renderizarCadastro() {
   let container = document.getElementById('cadastroAcordeao');
-  // Salvar quais estão abertos
   let tiposAbertos = [];
   let itensAbertos = [];
-  container.querySelectorAll('.cad-tipo.aberto').forEach(el => {
-    tiposAbertos.push(el.dataset.tipo);
-  });
-  container.querySelectorAll('.cad-item.aberto').forEach(el => {
-    itensAbertos.push(el.dataset.tipo + '|' + el.dataset.item);
-  });
-
+  container.querySelectorAll('.cad-tipo.aberto').forEach(el => { tiposAbertos.push(el.dataset.tipo); });
+  container.querySelectorAll('.cad-item.aberto').forEach(el => { itensAbertos.push(el.dataset.tipo + '|' + el.dataset.item); });
   container.innerHTML = '';
 
-      let tipos = [
+  let tipos = [
     { chave: 'brf', nome: 'BRF' },
     { chave: 'tampas', nome: 'Tampas' },
     { chave: 'laminacao', nome: '1ª Laminação' }
@@ -1983,30 +1981,25 @@ function renderizarCadastro() {
     divTipo.dataset.tipo = tipo.chave;
     if (tiposAbertos.includes(tipo.chave)) divTipo.classList.add('aberto');
 
-    // Header do tipo
     let header = document.createElement('button');
     header.className = 'cad-tipo-header';
-        header.innerHTML = `
-      <span>${tipo.nome} <span style="font-weight:400; font-size:12px; color:inherit; opacity:0.7;">(${itens.length} itens, ${totalVersoes} versões)</span></span>
+    header.innerHTML = `
+      <span>${tipo.nome} <span style="font-weight:400; font-size:12px; opacity:0.7;">(${itens.length} itens, ${totalVersoes} versões)</span></span>
       <span class="cad-seta">▶</span>
     `;
     header.onclick = function() { divTipo.classList.toggle('aberto'); };
 
-    // Body do tipo
     let body = document.createElement('div');
     body.className = 'cad-tipo-body';
 
-    // Itens
     itens.forEach(itemNome => {
       let versoes = Object.keys(banco[tipo.chave][itemNome]).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
-
       let divItem = document.createElement('div');
       divItem.className = 'cad-item';
       divItem.dataset.tipo = tipo.chave;
       divItem.dataset.item = itemNome;
       if (itensAbertos.includes(tipo.chave + '|' + itemNome)) divItem.classList.add('aberto');
 
-      // Header do item
       let itemHeader = document.createElement('button');
       itemHeader.className = 'cad-item-header';
       itemHeader.innerHTML = `
@@ -2021,7 +2014,6 @@ function renderizarCadastro() {
         divItem.classList.toggle('aberto');
       };
 
-      // Body do item (versões)
       let itemBody = document.createElement('div');
       itemBody.className = 'cad-item-body';
 
@@ -2042,7 +2034,6 @@ function renderizarCadastro() {
         itemBody.appendChild(divVersao);
       });
 
-      // Botão adicionar versão
       let btnAddVersao = document.createElement('button');
       btnAddVersao.className = 'cad-btn-add';
       btnAddVersao.textContent = '+ Adicionar versão';
@@ -2054,7 +2045,6 @@ function renderizarCadastro() {
       body.appendChild(divItem);
     });
 
-    // Botão adicionar item
     let btnAddItem = document.createElement('button');
     btnAddItem.className = 'cad-btn-add';
     btnAddItem.textContent = '+ Adicionar item';
@@ -2067,38 +2057,25 @@ function renderizarCadastro() {
   });
 }
 
-// Adicionar item
 window.adicionarItem = function(tipo) {
   let nome = prompt("Nome do novo item:");
   if (!nome || !nome.trim()) return;
   nome = nome.trim();
-
-  if (banco[tipo][nome]) {
-    alert("Este item já existe!");
-    return;
-  }
-
+  if (banco[tipo][nome]) { mostrarToast('Este item já existe!', 'erro'); return; }
   banco[tipo][nome] = {};
   salvarBanco();
   renderizarCadastro();
   mostrarToast('Item adicionado');
 };
 
-// Editar nome do item
 window.editarNomeItem = function(tipo, itemAntigo) {
   let novoNome = prompt("Novo nome para o item:", itemAntigo);
   if (!novoNome || !novoNome.trim() || novoNome.trim() === itemAntigo) return;
   novoNome = novoNome.trim();
-
-  if (banco[tipo][novoNome]) {
-    alert("Já existe um item com este nome!");
-    return;
-  }
-
+  if (banco[tipo][novoNome]) { mostrarToast('Já existe um item com este nome!', 'erro'); return; }
   let temEstoque = Object.keys(estoque).some(chave => chave.startsWith(itemAntigo + " - V"));
   if (temEstoque) {
     if (!confirm("Este item possui entradas no estoque.\n\nAs chaves serão atualizadas.\n\nDeseja continuar?")) return;
-
     Object.keys(estoque).forEach(chave => {
       if (chave.startsWith(itemAntigo + " - V")) {
         let novaChave = chave.replace(itemAntigo, novoNome);
@@ -2110,16 +2087,11 @@ window.editarNomeItem = function(tipo, itemAntigo) {
         }
       }
     });
-
     historico.forEach(h => {
-      if (h.item && h.item.startsWith(itemAntigo + " - V")) {
-        h.item = h.item.replace(itemAntigo, novoNome);
-      }
+      if (h.item && h.item.startsWith(itemAntigo + " - V")) h.item = h.item.replace(itemAntigo, novoNome);
     });
-
     salvarDados();
   }
-
   banco[tipo][novoNome] = banco[tipo][itemAntigo];
   delete banco[tipo][itemAntigo];
   salvarBanco();
@@ -2128,80 +2100,55 @@ window.editarNomeItem = function(tipo, itemAntigo) {
   mostrarToast('Item renomeado');
 };
 
-// Remover item
 window.removerItem = function(tipo, item) {
   let versoes = Object.keys(banco[tipo][item]).length;
   if (!confirm("Excluir " + item + " e suas " + versoes + " versão(ões)?")) return;
-
   delete banco[tipo][item];
   salvarBanco();
   renderizarCadastro();
   mostrarToast('Item excluído');
 };
 
-// Adicionar versão
 window.adicionarVersao = function(tipo, item) {
   let versao = prompt("Número da versão:");
   if (!versao || !versao.trim()) return;
   versao = versao.trim();
-
-  if (banco[tipo][item][versao]) {
-    alert("Esta versão já existe!");
-    return;
-  }
-
+  if (banco[tipo][item][versao]) { mostrarToast('Esta versão já existe!', 'erro'); return; }
   let tamanho = prompt("Medidas (ex: 66 x 60):");
   if (!tamanho || !tamanho.trim()) return;
   tamanho = tamanho.trim();
-
   banco[tipo][item][versao] = { tamanho: tamanho };
   salvarBanco();
   renderizarCadastro();
   mostrarToast('Versão adicionada');
 };
 
-// Editar versão
 window.editarVersao = function(tipo, item, versao) {
   let dados = banco[tipo][item][versao];
-
   let novaVersao = prompt("Número da versão:", versao);
   if (!novaVersao || !novaVersao.trim()) return;
   novaVersao = novaVersao.trim();
-
   let novoTamanho = prompt("Medidas:", dados.tamanho || '');
   if (!novoTamanho || !novoTamanho.trim()) return;
   novoTamanho = novoTamanho.trim();
-
   if (novaVersao !== versao) {
-    if (banco[tipo][item][novaVersao]) {
-      alert("Já existe uma versão com este número!");
-      return;
-    }
-
+    if (banco[tipo][item][novaVersao]) { mostrarToast('Já existe uma versão com este número!', 'erro'); return; }
     let chaveAntiga = item + " - V" + versao;
     let chaveNova = item + " - V" + novaVersao;
     let temEstoque = estoque[chaveAntiga] !== undefined;
-
     if (temEstoque) {
       if (!confirm("Esta versão possui entradas no estoque.\n\nAs chaves serão atualizadas.\n\nDeseja continuar?")) return;
-
       estoque[chaveNova] = estoque[chaveAntiga];
       delete estoque[chaveAntiga];
       if (estoque[chaveAntiga + '_qtd'] !== undefined) {
         estoque[chaveNova + '_qtd'] = estoque[chaveAntiga + '_qtd'];
         delete estoque[chaveAntiga + '_qtd'];
       }
-
-      historico.forEach(h => {
-        if (h.item === chaveAntiga) h.item = chaveNova;
-      });
-
+      historico.forEach(h => { if (h.item === chaveAntiga) h.item = chaveNova; });
       salvarDados();
     }
-
     delete banco[tipo][item][versao];
   }
-
   banco[tipo][item][novaVersao] = { tamanho: novoTamanho };
   salvarBanco();
   renderizarCadastro();
@@ -2209,12 +2156,9 @@ window.editarVersao = function(tipo, item, versao) {
   mostrarToast('Versão atualizada');
 };
 
-// Remover versão
 window.removerVersao = function(tipo, item, versao) {
   if (!confirm("Excluir a versão V" + versao + "?")) return;
-
   delete banco[tipo][item][versao];
-
   if (Object.keys(banco[tipo][item]).length === 0) {
     delete banco[tipo][item];
     salvarBanco();
@@ -2222,9 +2166,23 @@ window.removerVersao = function(tipo, item, versao) {
     mostrarToast('Versão e item excluídos');
     return;
   }
-
   salvarBanco();
   renderizarCadastro();
   mostrarToast('Versão excluída');
 };
 
+function criarSnapshotEstado() {
+  return {
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  };
+}
+
+function restaurarSnapshotEstado(snapshot) {
+  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
+  historico = JSON.parse(JSON.stringify(snapshot.historico));
+  salvarDados();
+  atualizarTabela();
+  atualizarHistorico();
+  if (tipoDetalheAtual) atualizarDetalhes();
+}
