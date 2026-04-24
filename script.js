@@ -173,6 +173,7 @@ let estoque = {};
 let historico = [];
 
 function carregarDados() {
+  carregarBancoCustom();
   estoque = JSON.parse(localStorage.getItem("estoque")) || {};
   historico = JSON.parse(localStorage.getItem("historico")) || [];
 
@@ -218,16 +219,15 @@ window.mostrarTela = function(t){
   document.querySelectorAll('.nav-top button').forEach(btn => btn.classList.remove('ativo'));
   document.querySelector(`.nav-top button[onclick="mostrarTela('${t}')"]`).classList.add('ativo');
 
-  const btnExpandir = document.getElementById("btnExpandir");
-  const btnExportar = document.getElementById("btnExportarGlobal");
+const btnExpandir = document.getElementById("btnExpandir");
 
-  if (t === "movimentar") {
-    btnExpandir.style.display = "none";
-    btnExportar.style.display = "none";
-  } else {
-    btnExpandir.style.display = "block";
-    btnExportar.style.display = "block";
-  }
+if (t === "movimentar") {
+  btnExpandir.style.visibility = "hidden";
+  btnExpandir.style.pointerEvents = "none";
+} else {
+  btnExpandir.style.visibility = "visible";
+  btnExpandir.style.pointerEvents = "auto";
+}
 
   atualizarTabela();
   atualizarHistorico();
@@ -397,6 +397,8 @@ function movimentar(tipoMov){
   let identificador = item + " - V" + versao;
   if(!estoque[identificador]) estoque[identificador] = 0;
 
+  salvarEstadoParaDesfazer();
+
   if(tipoMov === 'remove'){
     if(!estoque[identificador] || estoque[identificador] <= 0){ alert("Sem saldo"); return; }
     if(qtd > estoque[identificador]){ alert("Peso maior que o saldo disponível"); return; }
@@ -527,7 +529,10 @@ function atualizarTabela(){
     });
   }
 
-  if(totalGeralLabel) totalGeralLabel.innerHTML = formatarPeso(pesoTotal) + " kg";
+    if(totalGeralLabel) totalGeralLabel.innerHTML = formatarPeso(pesoTotal) + " kg";
+  let totalBobinasLabel = document.getElementById("totalBobinas");
+  let totalBobinasCount = dados.reduce((acc, d) => acc + d.qtdEntradas, 0);
+  if(totalBobinasLabel) totalBobinasLabel.textContent = totalBobinasCount + " bobinas";
   if(totalBrfLabel) totalBrfLabel.innerHTML = formatarPeso(totalBrf) + " kg";
   if(totalTampasLabel) totalTampasLabel.innerHTML = formatarPeso(totalTampas) + " kg";
   if(totalLaminacaoLabel) totalLaminacaoLabel.innerHTML = formatarPeso(totalLaminacao) + " kg";
@@ -564,6 +569,8 @@ function atualizarTabela(){
 function remover(item){
   if(!confirm("Tem certeza que deseja remover este item do estoque?")) return;
 
+  salvarEstadoParaDesfazer();
+
   backup = { tipo: 'estoque', item, valor: estoque[item], qtd: estoque[item + '_qtd'] };
 
   let entradasParaExcluir = historico.filter(h =>
@@ -590,17 +597,7 @@ function remover(item){
   atualizarTabela();
   atualizarHistorico();
 
-  mostrarToast(() => {
-    estoque[item] = backup.valor;
-    estoque[item + '_qtd'] = backup.qtd;
-    historico.forEach(h => { if (h.item === item && h._removidaEstoque) delete h._removidaEstoque; });
-    for(let i = historico.length-1; i >= 0; i--) {
-      if(historico[i].item === item && historico[i].tipo === 'Exclusão') historico.splice(i, 1);
-    }
-    salvarDados();
-    atualizarTabela();
-    atualizarHistorico();
-  });
+    mostrarToast('Item removido');
 }
 
 /* ================= HISTÓRICO ================= */
@@ -808,21 +805,15 @@ function atualizarHistorico(){
 
 /* ================= TOAST ================= */
 
-function mostrarToast(callback, texto = 'Removido'){
+function mostrarToast(texto = 'Concluído'){
   let div = document.createElement('div');
   div.className = 'toast';
-  div.innerHTML = `${texto} <button style="background:#16a34a;color:white;">Desfazer</button>`;
-
-  div.querySelector('button').onclick = function(){
-    callback();
-    div.remove();
-  };
-
+  div.textContent = texto;
   document.body.appendChild(div);
 
   setTimeout(function(){
     if (div.parentNode) div.remove();
-  }, 5000);
+  }, 3000);
 }
 
 function criarSnapshotEstado() {
@@ -881,11 +872,6 @@ function exportarParaExcel(nomeArquivo, dados){
 
 let tipoExportacaoAtual = '';
 
-window.abrirModalExportar = function(){
-  document.getElementById("modalExportar").classList.remove("hidden");
-  ajustarOpcaoPeriodo();
-};
-
 function ajustarOpcaoPeriodo() {
   const tipoSelecionado = document.querySelector('input[name="tipoDados"]:checked');
   const blocoPeriodo = document.getElementById("blocoPeriodo");
@@ -900,10 +886,6 @@ function ajustarOpcaoPeriodo() {
     if (blocoPeriodo) blocoPeriodo.style.display = "block";
   }
 }
-
-window.fecharModalExportar = function(){
-  document.getElementById("modalExportar").classList.add("hidden");
-};
 
 window.togglePeriodo = function(show){
   const area = document.getElementById("areaPeriodo");
@@ -927,7 +909,7 @@ window.executarExportacao = function(){
   if (tipoDados === 'historico') exportarHistorico(dataInicio, dataFim);
   if (tipoDados === 'ambos') exportarAmbos(dataInicio, dataFim);
   if (tipoDados === 'backup') exportarBackup();
-  fecharModalExportar();
+  fecharModalConfig();
 }
 
 function getTimestamp(){
@@ -1246,21 +1228,37 @@ function importarBackup() { document.getElementById('inputBackup').click(); }
 function processarBackup(event) {
   const arquivo = event.target.files[0];
   if (!arquivo) return;
+
   const leitor = new FileReader();
+
   leitor.onload = function (e) {
     try {
       const dados = JSON.parse(e.target.result);
-      if (!dados.estoque || !dados.historico) { alert("Arquivo de backup inválido!"); return; }
-      if (!confirm("Isso vai substituir TODOS os dados atuais pelo backup.\n\nData do backup: " + (dados.dataBackup || "desconhecida") + "\n\nDeseja continuar?")) return;
+
+      if (!dados.estoque || !dados.historico) {
+        alert("Arquivo de backup inválido!");
+        return;
+      }
+
+      if (!confirm("Isso vai substituir TODOS os dados atuais pelo backup.\n\nData do backup: " + (dados.dataBackup || "desconhecida") + "\n\nDeseja continuar?")) {
+        return;
+      }
+
       estoque = dados.estoque;
       historico = dados.historico;
+
       salvarDados();
       atualizarTabela();
       atualizarHistorico();
+
       alert("Backup restaurado com sucesso!");
-      fecharModalExportar();
-    } catch (erro) { alert("Erro ao ler o arquivo de backup!"); }
+      fecharModalConfig();
+
+    } catch (erro) {
+      alert("Erro ao ler o arquivo de backup!");
+    }
   };
+
   leitor.readAsText(arquivo);
   event.target.value = "";
 }
@@ -1347,6 +1345,7 @@ function editarBobina() {
 }
 
 function consumirBobina() {
+  salvarEstadoParaDesfazer();
   if (opcaoAtual.tipo === 'bobina') {
     let reg = historico[opcaoAtual.indexHistorico];
     if (!reg) return;
@@ -1364,17 +1363,8 @@ function consumirBobina() {
           regConsumoRemovido = historico[i]; historico.splice(i, 1); break;
         }
       }
-      salvarDados(); atualizarTudo(); fecharModalOpcoes();
-      mostrarToast(() => {
-        reg.consumida = true;
-        if (estoque[backupChave]) {
-          estoque[backupChave] -= reg.qtd;
-          if (estoque[backupChave] <= 0) { delete estoque[backupChave]; delete estoque[backupChave+'_qtd']; }
-          else if (estoque[backupChave+'_qtd'] > 0) estoque[backupChave+'_qtd']--;
-        }
-        if (regConsumoRemovido) historico.push(regConsumoRemovido);
-        salvarDados(); atualizarTudo();
-      });
+            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Consumo desmarcado');
     } else {
       reg.consumida = true;
       if (estoque[opcaoAtual.chave]) {
@@ -1384,17 +1374,8 @@ function consumirBobina() {
       }
       let regConsumo = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
       historico.push(regConsumo);
-      salvarDados(); atualizarTudo(); fecharModalOpcoes();
-      mostrarToast(() => {
-        reg.consumida = false;
-        if (!estoque[backupChave]) estoque[backupChave] = 0;
-        estoque[backupChave] += reg.qtd;
-        if (!estoque[backupChave+'_qtd']) estoque[backupChave+'_qtd'] = 0;
-        estoque[backupChave+'_qtd']++;
-        let idxConsumo = historico.indexOf(regConsumo);
-        if (idxConsumo !== -1) historico.splice(idxConsumo, 1);
-        salvarDados(); atualizarTudo();
-      });
+            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Bobina consumida');
     }
   } else if (opcaoAtual.tipo === 'item') {
     let entradas = historico.filter(h => h.item === opcaoAtual.chave && h.tipo === "Entrada");
@@ -1415,13 +1396,8 @@ function consumirBobina() {
           consumosRemovidos.push(historico[i]); historico.splice(i, 1);
         }
       }
-      salvarDados(); atualizarTudo(); fecharModalOpcoes();
-      mostrarToast(() => {
-        entradasAlteradas.forEach(h => { h.consumida = true; });
-        consumosRemovidos.forEach(reg => historico.push(reg));
-        estoque[backupChave] = backupEstoque; estoque[backupChave+'_qtd'] = backupQtd;
-        salvarDados(); atualizarTudo();
-      });
+            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Consumo desmarcado');
     } else {
       entradas.forEach(h => {
         if (!h.consumida) {
@@ -1431,13 +1407,8 @@ function consumirBobina() {
           historico.push(regConsumo); consumosCriados.push(regConsumo);
         }
       });
-      salvarDados(); atualizarTudo(); fecharModalOpcoes();
-      mostrarToast(() => {
-        entradasAlteradas.forEach(h => { h.consumida = false; });
-        consumosCriados.forEach(reg => { let idx = historico.indexOf(reg); if (idx !== -1) historico.splice(idx, 1); });
-        estoque[backupChave] = backupEstoque; estoque[backupChave+'_qtd'] = backupQtd;
-        salvarDados(); atualizarTudo();
-      });
+            salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Todas consumidas');
     }
   }
 }
@@ -1445,6 +1416,7 @@ function consumirBobina() {
 /* ================= EXCLUIR BOBINA ================= */
 
 window.excluirBobina = function() {
+  salvarEstadoParaDesfazer();
   if (opcaoAtual.tipo === 'bobina') {
     if (!confirm("Remover esta bobina?")) return;
     let reg = historico[opcaoAtual.indexHistorico];
@@ -1458,19 +1430,8 @@ window.excluirBobina = function() {
     reg._removidaEstoque = true;
     let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
     historico.push(regExclusao);
-    salvarDados(); atualizarTudo(); fecharModalOpcoes();
-    mostrarToast(() => {
-      delete reg._removidaEstoque;
-      if (!backupConsumida) {
-        if (!estoque[backupChave]) estoque[backupChave] = 0;
-        estoque[backupChave] += backupQtd;
-        if (!estoque[backupChave+'_qtd']) estoque[backupChave+'_qtd'] = 0;
-        estoque[backupChave+'_qtd']++;
-      }
-      let idxExclusao = historico.indexOf(regExclusao);
-      if (idxExclusao !== -1) historico.splice(idxExclusao, 1);
-      salvarDados(); atualizarTudo();
-    });
+        salvarDados(); atualizarTudo(); fecharModalOpcoes();
+    mostrarToast('Bobina excluída');
   } else if (opcaoAtual.tipo === 'item') {
     if (!confirm("Remover TODAS as bobinas de " + opcaoAtual.chave + "?")) return;
     let backupChave = opcaoAtual.chave, backupEstoque = estoque[opcaoAtual.chave]||0, backupQtd = estoque[opcaoAtual.chave+'_qtd']||0;
@@ -1481,19 +1442,15 @@ window.excluirBobina = function() {
       historico.push(regExclusao); exclusoesCriadas.push(regExclusao);
     });
     delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd'];
-    salvarDados(); atualizarTudo(); fecharModalOpcoes();
-    mostrarToast(() => {
-      entradasAfetadas.forEach(h => delete h._removidaEstoque);
-      exclusoesCriadas.forEach(reg => { let idx = historico.indexOf(reg); if (idx !== -1) historico.splice(idx, 1); });
-      estoque[backupChave] = backupEstoque; estoque[backupChave+'_qtd'] = backupQtd;
-      salvarDados(); atualizarTudo();
-    });
+        salvarDados(); atualizarTudo(); fecharModalOpcoes();
+    mostrarToast('Bobinas excluídas');
   }
 }
 
 /* ================= EXCLUIR CONSUMIDAS ================= */
 
 window.excluirConsumidas = function() {
+  salvarEstadoParaDesfazer();
   if (!confirm("Remover todas as bobinas consumidas de " + opcaoAtual.chave + "?")) return;
   let entradasAfetadas = [], exclusoesCriadas = [];
   historico.forEach(h => {
@@ -1503,12 +1460,8 @@ window.excluirConsumidas = function() {
       historico.push(regExclusao); exclusoesCriadas.push(regExclusao);
     }
   });
-  salvarDados(); atualizarTudo(); fecharModalOpcoes();
-  mostrarToast(() => {
-    entradasAfetadas.forEach(h => delete h._removidaEstoque);
-    exclusoesCriadas.forEach(reg => { let idx = historico.indexOf(reg); if (idx !== -1) historico.splice(idx, 1); });
-    salvarDados(); atualizarTudo();
-  });
+   salvarDados(); atualizarTudo(); fecharModalOpcoes();
+  mostrarToast('Consumidas excluídas');
 }
 
 /* ================= ATUALIZAR TUDO ================= */
@@ -1633,6 +1586,7 @@ function zerouExcluir() {
 }
 
 function finalizarSaida() {
+  salvarEstadoParaDesfazer();
   let snapshotAntesSaida = criarSnapshotEstado();
   let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a+b, 0);
   let bobsConsumidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._consumir);
@@ -1710,8 +1664,8 @@ function finalizarSaida() {
   document.getElementById('buscaItem').value = '';
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
 
-  if (bobsExcluidas.length > 0) {
-    mostrarToast(() => restaurarSnapshotEstado(snapshotAntesSaida), 'Exclusão aplicada');
+    if (bobsExcluidas.length > 0) {
+    mostrarToast('Saída aplicada');
   }
 
   setTimeout(function() {
@@ -1746,6 +1700,7 @@ document.addEventListener("DOMContentLoaded", function() {
     if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o estoque?\n\nAs exclusões serão registradas no histórico.")) return;
 
     let snapshot = criarSnapshotEstado();
+        salvarEstadoParaDesfazer();
     let alterou = excluirTodoEstoqueComHistorico();
 
     salvarDados();
@@ -1755,8 +1710,8 @@ document.addEventListener("DOMContentLoaded", function() {
     if (tipoDetalheAtual) atualizarDetalhes();
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
 
-    if (alterou) {
-      mostrarToast(() => restaurarSnapshotEstado(snapshot), 'Estoque excluído');
+        if (alterou) {
+      mostrarToast('Estoque excluído');
     } else {
       alert("Nenhum item no estoque para excluir.");
     }
@@ -1780,6 +1735,7 @@ document.addEventListener("DOMContentLoaded", function() {
     if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir todo o estoque de " + nomeTipo + "?\n\nAs exclusões serão registradas no histórico.")) return;
 
     let snapshot = criarSnapshotEstado();
+        salvarEstadoParaDesfazer();
     let alterou = excluirEstoquePorTipoComHistorico(tipoDetalheAtual);
 
     salvarDados();
@@ -1789,8 +1745,8 @@ document.addEventListener("DOMContentLoaded", function() {
 
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
 
-    if (alterou) {
-      mostrarToast(() => restaurarSnapshotEstado(snapshot), nomeTipo + ' excluído');
+        if (alterou) {
+      mostrarToast(nomeTipo + ' excluído');
     } else {
       alert("Nenhum item de " + nomeTipo + " no estoque.");
     }
@@ -1818,13 +1774,457 @@ window.removerHistorico = function(i){
     return;
   }
   if(!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
+ salvarEstadoParaDesfazer();
   backup = { tipo: 'historico', index: i, valor: historico[i] };
   historico.splice(i, 1);
   salvarDados();
   atualizarHistorico();
-  mostrarToast(() => {
-    historico.splice(backup.index, 0, backup.valor);
-    salvarDados();
-    atualizarHistorico();
-  });
+    mostrarToast('Registro removido');
 };
+
+/* ================= MENU CONFIGURAÇÕES ================= */
+
+window.abrirModalConfig = function() {
+  voltarConfigPrincipal();
+  document.getElementById('modalConfig').classList.remove('hidden');
+};
+
+window.fecharModalConfig = function() {
+  document.getElementById('modalConfig').classList.add('hidden');
+};
+
+window.voltarConfigPrincipal = function() {
+  document.getElementById('configTitulo').textContent = 'Configurações';
+  document.getElementById('configMenuPrincipal').classList.remove('hidden');
+  document.getElementById('configTelaExportar').classList.add('hidden');
+  document.getElementById('configTelaBackup').classList.add('hidden');
+  document.getElementById('configTelaCadastro').classList.add('hidden');
+};
+
+window.abrirConfigExportar = function() {
+  document.getElementById('configTitulo').textContent = 'Exportar dados';
+  document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaExportar').classList.remove('hidden');
+};
+
+window.abrirConfigBackup = function() {
+  document.getElementById('configTitulo').textContent = 'Backup / Restaurar';
+  document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaBackup').classList.remove('hidden');
+};
+
+window.alternarModoEscuro = function() {
+  document.body.classList.toggle('dark-mode');
+  localStorage.setItem('modoEscuro', document.body.classList.contains('dark-mode'));
+};
+
+/* ================= SISTEMA DE DESFAZER / REFAZER (10 NÍVEIS) ================= */
+
+let pilhaDesfazer = [];
+let pilhaRefazer = [];
+const MAX_DESFAZER = 10;
+
+function salvarEstadoParaDesfazer() {
+  let snapshot = {
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  };
+
+  pilhaDesfazer.push(snapshot);
+
+  if (pilhaDesfazer.length > MAX_DESFAZER) {
+    pilhaDesfazer.shift();
+  }
+
+  // Nova ação limpa o refazer
+  pilhaRefazer = [];
+
+  atualizarBotoesDesfazerRefazer();
+}
+
+window.desfazerAcao = function() {
+  if (pilhaDesfazer.length === 0) return;
+
+  // Salva estado atual no refazer
+  pilhaRefazer.push({
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  });
+
+  if (pilhaRefazer.length > MAX_DESFAZER) {
+    pilhaRefazer.shift();
+  }
+
+  let snapshot = pilhaDesfazer.pop();
+
+  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
+  historico = JSON.parse(JSON.stringify(snapshot.historico));
+
+  salvarDados();
+  atualizarTudo();
+  atualizarBotoesDesfazerRefazer();
+
+  if (navigator.vibrate) navigator.vibrate([50]);
+};
+
+window.refazerAcao = function() {
+  if (pilhaRefazer.length === 0) return;
+
+  // Salva estado atual no desfazer
+  pilhaDesfazer.push({
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  });
+
+  if (pilhaDesfazer.length > MAX_DESFAZER) {
+    pilhaDesfazer.shift();
+  }
+
+  let snapshot = pilhaRefazer.pop();
+
+  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
+  historico = JSON.parse(JSON.stringify(snapshot.historico));
+
+  salvarDados();
+  atualizarTudo();
+  atualizarBotoesDesfazerRefazer();
+
+  if (navigator.vibrate) navigator.vibrate([50]);
+};
+
+function atualizarBotoesDesfazerRefazer() {
+  let btnUndo = document.getElementById('btnDesfazer');
+  let btnRedo = document.getElementById('btnRefazer');
+
+  if (btnUndo) {
+    if (pilhaDesfazer.length > 0) {
+      btnUndo.classList.add('ativo');
+      btnUndo.title = 'Desfazer (' + pilhaDesfazer.length + ')';
+    } else {
+      btnUndo.classList.remove('ativo');
+      btnUndo.title = 'Nada para desfazer';
+    }
+  }
+
+  if (btnRedo) {
+    if (pilhaRefazer.length > 0) {
+      btnRedo.classList.add('ativo');
+      btnRedo.title = 'Refazer (' + pilhaRefazer.length + ')';
+    } else {
+      btnRedo.classList.remove('ativo');
+      btnRedo.title = 'Nada para refazer';
+    }
+  }
+}
+
+/* ================= GERENCIAR CADASTRO ================= */
+
+// Salvar banco customizado no localStorage
+function salvarBanco() {
+  localStorage.setItem("bancoCustom", JSON.stringify(banco));
+}
+
+// Carregar banco customizado do localStorage
+function carregarBancoCustom() {
+  let salvo = localStorage.getItem("bancoCustom");
+  if (salvo) {
+    let parsed = JSON.parse(salvo);
+    Object.keys(parsed).forEach(tipo => {
+      if (!banco[tipo]) banco[tipo] = {};
+      Object.keys(parsed[tipo]).forEach(item => {
+        banco[tipo][item] = parsed[tipo][item];
+      });
+    });
+    Object.keys(banco).forEach(tipo => {
+      if (!parsed[tipo]) { delete banco[tipo]; return; }
+      Object.keys(banco[tipo]).forEach(item => {
+        if (!parsed[tipo][item]) delete banco[tipo][item];
+      });
+    });
+  }
+}
+
+// Abrir tela de cadastro
+window.abrirConfigCadastro = function() {
+  document.getElementById('configTitulo').textContent = 'Gerenciar cadastro';
+  document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaCadastro').classList.remove('hidden');
+  renderizarCadastro();
+};
+
+// Renderizar acordeão completo
+function renderizarCadastro() {
+  let container = document.getElementById('cadastroAcordeao');
+  // Salvar quais estão abertos
+  let tiposAbertos = [];
+  let itensAbertos = [];
+  container.querySelectorAll('.cad-tipo.aberto').forEach(el => {
+    tiposAbertos.push(el.dataset.tipo);
+  });
+  container.querySelectorAll('.cad-item.aberto').forEach(el => {
+    itensAbertos.push(el.dataset.tipo + '|' + el.dataset.item);
+  });
+
+  container.innerHTML = '';
+
+      let tipos = [
+    { chave: 'brf', nome: 'BRF' },
+    { chave: 'tampas', nome: 'Tampas' },
+    { chave: 'laminacao', nome: '1ª Laminação' }
+  ];
+
+  tipos.forEach(tipo => {
+    if (!banco[tipo.chave]) banco[tipo.chave] = {};
+    let itens = Object.keys(banco[tipo.chave]).sort();
+    let totalVersoes = itens.reduce((acc, item) => acc + Object.keys(banco[tipo.chave][item]).length, 0);
+
+    let divTipo = document.createElement('div');
+    divTipo.className = 'cad-tipo';
+    divTipo.dataset.tipo = tipo.chave;
+    if (tiposAbertos.includes(tipo.chave)) divTipo.classList.add('aberto');
+
+    // Header do tipo
+    let header = document.createElement('button');
+    header.className = 'cad-tipo-header';
+        header.innerHTML = `
+      <span>${tipo.nome} <span style="font-weight:400; font-size:12px; color:inherit; opacity:0.7;">(${itens.length} itens, ${totalVersoes} versões)</span></span>
+      <span class="cad-seta">▶</span>
+    `;
+    header.onclick = function() { divTipo.classList.toggle('aberto'); };
+
+    // Body do tipo
+    let body = document.createElement('div');
+    body.className = 'cad-tipo-body';
+
+    // Itens
+    itens.forEach(itemNome => {
+      let versoes = Object.keys(banco[tipo.chave][itemNome]).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
+
+      let divItem = document.createElement('div');
+      divItem.className = 'cad-item';
+      divItem.dataset.tipo = tipo.chave;
+      divItem.dataset.item = itemNome;
+      if (itensAbertos.includes(tipo.chave + '|' + itemNome)) divItem.classList.add('aberto');
+
+      // Header do item
+      let itemHeader = document.createElement('button');
+      itemHeader.className = 'cad-item-header';
+      itemHeader.innerHTML = `
+        <span class="cad-seta">▶</span>
+        <span class="cad-item-nome">${itemNome}</span>
+        <span class="cad-item-qtd">${versoes.length}v</span>
+        <span class="cad-btn-mini" title="Renomear" onclick="event.stopPropagation(); editarNomeItem('${tipo.chave}', '${itemNome}')">✏️</span>
+        <span class="cad-btn-mini excluir" title="Excluir item" onclick="event.stopPropagation(); removerItem('${tipo.chave}', '${itemNome}')">🗑️</span>
+      `;
+      itemHeader.onclick = function(e) {
+        if (e.target.classList.contains('cad-btn-mini')) return;
+        divItem.classList.toggle('aberto');
+      };
+
+      // Body do item (versões)
+      let itemBody = document.createElement('div');
+      itemBody.className = 'cad-item-body';
+
+      versoes.forEach(v => {
+        let tamanho = banco[tipo.chave][itemNome][v].tamanho || '';
+        let divVersao = document.createElement('div');
+        divVersao.className = 'cad-versao';
+        divVersao.innerHTML = `
+          <div class="cad-versao-info">
+            <span class="cad-versao-nome">V${v}</span>
+            <span class="cad-versao-tamanho">${tamanho}</span>
+          </div>
+          <div class="cad-versao-acoes">
+            <button class="cad-btn-mini" onclick="editarVersao('${tipo.chave}', '${itemNome}', '${v}')" title="Editar">✏️</button>
+            <button class="cad-btn-mini excluir" onclick="removerVersao('${tipo.chave}', '${itemNome}', '${v}')" title="Excluir">🗑️</button>
+          </div>
+        `;
+        itemBody.appendChild(divVersao);
+      });
+
+      // Botão adicionar versão
+      let btnAddVersao = document.createElement('button');
+      btnAddVersao.className = 'cad-btn-add';
+      btnAddVersao.textContent = '+ Adicionar versão';
+      btnAddVersao.onclick = function() { adicionarVersao(tipo.chave, itemNome); };
+      itemBody.appendChild(btnAddVersao);
+
+      divItem.appendChild(itemHeader);
+      divItem.appendChild(itemBody);
+      body.appendChild(divItem);
+    });
+
+    // Botão adicionar item
+    let btnAddItem = document.createElement('button');
+    btnAddItem.className = 'cad-btn-add';
+    btnAddItem.textContent = '+ Adicionar item';
+    btnAddItem.onclick = function() { adicionarItem(tipo.chave); };
+    body.appendChild(btnAddItem);
+
+    divTipo.appendChild(header);
+    divTipo.appendChild(body);
+    container.appendChild(divTipo);
+  });
+}
+
+// Adicionar item
+window.adicionarItem = function(tipo) {
+  let nome = prompt("Nome do novo item:");
+  if (!nome || !nome.trim()) return;
+  nome = nome.trim();
+
+  if (banco[tipo][nome]) {
+    alert("Este item já existe!");
+    return;
+  }
+
+  banco[tipo][nome] = {};
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Item adicionado');
+};
+
+// Editar nome do item
+window.editarNomeItem = function(tipo, itemAntigo) {
+  let novoNome = prompt("Novo nome para o item:", itemAntigo);
+  if (!novoNome || !novoNome.trim() || novoNome.trim() === itemAntigo) return;
+  novoNome = novoNome.trim();
+
+  if (banco[tipo][novoNome]) {
+    alert("Já existe um item com este nome!");
+    return;
+  }
+
+  let temEstoque = Object.keys(estoque).some(chave => chave.startsWith(itemAntigo + " - V"));
+  if (temEstoque) {
+    if (!confirm("Este item possui entradas no estoque.\n\nAs chaves serão atualizadas.\n\nDeseja continuar?")) return;
+
+    Object.keys(estoque).forEach(chave => {
+      if (chave.startsWith(itemAntigo + " - V")) {
+        let novaChave = chave.replace(itemAntigo, novoNome);
+        estoque[novaChave] = estoque[chave];
+        delete estoque[chave];
+        if (estoque[chave + '_qtd'] !== undefined) {
+          estoque[novaChave + '_qtd'] = estoque[chave + '_qtd'];
+          delete estoque[chave + '_qtd'];
+        }
+      }
+    });
+
+    historico.forEach(h => {
+      if (h.item && h.item.startsWith(itemAntigo + " - V")) {
+        h.item = h.item.replace(itemAntigo, novoNome);
+      }
+    });
+
+    salvarDados();
+  }
+
+  banco[tipo][novoNome] = banco[tipo][itemAntigo];
+  delete banco[tipo][itemAntigo];
+  salvarBanco();
+  renderizarCadastro();
+  atualizarTudo();
+  mostrarToast('Item renomeado');
+};
+
+// Remover item
+window.removerItem = function(tipo, item) {
+  let versoes = Object.keys(banco[tipo][item]).length;
+  if (!confirm("Excluir " + item + " e suas " + versoes + " versão(ões)?")) return;
+
+  delete banco[tipo][item];
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Item excluído');
+};
+
+// Adicionar versão
+window.adicionarVersao = function(tipo, item) {
+  let versao = prompt("Número da versão:");
+  if (!versao || !versao.trim()) return;
+  versao = versao.trim();
+
+  if (banco[tipo][item][versao]) {
+    alert("Esta versão já existe!");
+    return;
+  }
+
+  let tamanho = prompt("Medidas (ex: 66 x 60):");
+  if (!tamanho || !tamanho.trim()) return;
+  tamanho = tamanho.trim();
+
+  banco[tipo][item][versao] = { tamanho: tamanho };
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Versão adicionada');
+};
+
+// Editar versão
+window.editarVersao = function(tipo, item, versao) {
+  let dados = banco[tipo][item][versao];
+
+  let novaVersao = prompt("Número da versão:", versao);
+  if (!novaVersao || !novaVersao.trim()) return;
+  novaVersao = novaVersao.trim();
+
+  let novoTamanho = prompt("Medidas:", dados.tamanho || '');
+  if (!novoTamanho || !novoTamanho.trim()) return;
+  novoTamanho = novoTamanho.trim();
+
+  if (novaVersao !== versao) {
+    if (banco[tipo][item][novaVersao]) {
+      alert("Já existe uma versão com este número!");
+      return;
+    }
+
+    let chaveAntiga = item + " - V" + versao;
+    let chaveNova = item + " - V" + novaVersao;
+    let temEstoque = estoque[chaveAntiga] !== undefined;
+
+    if (temEstoque) {
+      if (!confirm("Esta versão possui entradas no estoque.\n\nAs chaves serão atualizadas.\n\nDeseja continuar?")) return;
+
+      estoque[chaveNova] = estoque[chaveAntiga];
+      delete estoque[chaveAntiga];
+      if (estoque[chaveAntiga + '_qtd'] !== undefined) {
+        estoque[chaveNova + '_qtd'] = estoque[chaveAntiga + '_qtd'];
+        delete estoque[chaveAntiga + '_qtd'];
+      }
+
+      historico.forEach(h => {
+        if (h.item === chaveAntiga) h.item = chaveNova;
+      });
+
+      salvarDados();
+    }
+
+    delete banco[tipo][item][versao];
+  }
+
+  banco[tipo][item][novaVersao] = { tamanho: novoTamanho };
+  salvarBanco();
+  renderizarCadastro();
+  atualizarTudo();
+  mostrarToast('Versão atualizada');
+};
+
+// Remover versão
+window.removerVersao = function(tipo, item, versao) {
+  if (!confirm("Excluir a versão V" + versao + "?")) return;
+
+  delete banco[tipo][item][versao];
+
+  if (Object.keys(banco[tipo][item]).length === 0) {
+    delete banco[tipo][item];
+    salvarBanco();
+    renderizarCadastro();
+    mostrarToast('Versão e item excluídos');
+    return;
+  }
+
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Versão excluída');
+};
+
