@@ -1,0 +1,3533 @@
+/* ================= TOAST ================= */
+
+function mostrarToast(texto = 'Concluído', tipo = 'sucesso'){
+  let div = document.createElement('div');
+  div.className = 'toast toast-' + tipo;
+  div.textContent = texto;
+  document.body.appendChild(div);
+  setTimeout(function(){
+    div.classList.add('toast-saindo');
+    setTimeout(function(){ if(div.parentNode) div.remove(); }, 300);
+  }, 2700);
+}
+
+/* ================= AUXILIARES FORMATAÇÃO ================= */
+
+function formatarPeso(valor) {
+  return Math.round(valor).toLocaleString('pt-BR');
+}
+
+function nomeBonitoTipo(tipo){
+  if(tipo === "brf") return "BRF";
+  if(tipo === "tampas") return "Tampa";
+  if(tipo === "laminacao") return "1ª Lam.";
+  return tipo;
+}
+
+function nomeCompletoTipo(tipo){
+  if(tipo === "brf") return "BRF";
+  if(tipo === "tampas") return "Tampas";
+  if(tipo === "laminacao") return "1ª Laminação";
+  return tipo;
+}
+
+function normalizarTexto(texto){
+  return String(texto || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+/* ================= AUXILIARES EXCLUSÃO ================= */
+
+function obterTipoDoIdentificador(identificador) {
+  let item = identificador.split(" - V")[0];
+  let tipoEncontrado = "";
+  Object.keys(banco).forEach(tipo => {
+    if (banco[tipo] && banco[tipo][item]) tipoEncontrado = tipo;
+  });
+  return tipoEncontrado;
+}
+
+function registrarExclusaoHistorico(itemChave, qtd, entradaOriginal = null) {
+  historico.push({
+    id: Date.now() + Math.random(),
+    data: new Date().toLocaleString(),
+    tipo: 'Exclusão',
+    item: itemChave,
+    qtd: qtd,
+    refEntradaId: entradaOriginal ? (entradaOriginal.id || null) : null,
+    refEntradaData: entradaOriginal ? (entradaOriginal.data || null) : null
+  });
+}
+
+function excluirItemDoEstoqueComHistorico(itemChave) {
+  let alterou = false;
+  let pesoAtual = estoque[itemChave] || 0;
+  let entradasAtivas = historico.filter(h =>
+    h.item === itemChave &&
+    h.tipo === "Entrada" &&
+    !h.consumida &&
+    !h._removidaEstoque
+  );
+  if (entradasAtivas.length > 0) {
+    entradasAtivas.forEach(h => {
+      h._removidaEstoque = true;
+      registrarExclusaoHistorico(itemChave, h.qtd, h);
+      alterou = true;
+    });
+  } else if (pesoAtual > 0) {
+    registrarExclusaoHistorico(itemChave, pesoAtual, null);
+    alterou = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(estoque, itemChave)) {
+    delete estoque[itemChave];
+    delete estoque[itemChave + '_qtd'];
+    alterou = true;
+  }
+  return alterou;
+}
+
+function excluirEstoquePorTipoComHistorico(tipoDesejado) {
+  let alterou = false;
+  let chaves = Object.keys(estoque).filter(chave => !chave.endsWith('_qtd'));
+  chaves.forEach(chave => {
+    if (obterTipoDoIdentificador(chave) === tipoDesejado) {
+      if (excluirItemDoEstoqueComHistorico(chave)) alterou = true;
+    }
+  });
+  return alterou;
+}
+
+function excluirTodoEstoqueComHistorico() {
+  let alterou = false;
+  let chaves = Object.keys(estoque).filter(chave => !chave.endsWith('_qtd'));
+  chaves.forEach(chave => {
+    if (excluirItemDoEstoqueComHistorico(chave)) alterou = true;
+  });
+  return alterou;
+}
+
+/* ================= BANCO DE DADOS ================= */
+
+const tipoSelect = document.getElementById("tipoSelect");
+const itemSelect = document.getElementById("itemSelect");
+const versaoSelect = document.getElementById("versaoSelect");
+const saldoAtual = document.getElementById("saldoAtual");
+const totalGeralLabel = document.getElementById("totalGeral");
+const totalBrfLabel = document.getElementById("totalBrf");
+const totalTampasLabel = document.getElementById("totalTampas");
+const totalLaminacaoLabel = document.getElementById("totalLaminacao");
+const barraBrf = document.getElementById("barraBrf");
+const barraTampas = document.getElementById("barraTampas");
+const barraLaminacao = document.getElementById("barraLaminacao");
+const dataInicio = document.getElementById("dataInicio");
+const dataFim = document.getElementById("dataFim");
+
+const bancoPadrao = {
+  brf: {
+    "2000047": {
+      "1":  { tamanho: "66 x 60" },
+      "2":  { tamanho: "68.5 x 42.5" },
+      "4":  { tamanho: "68.5 x 50" },
+      "6":  { tamanho: "52 x 60" },
+      "12": { tamanho: "75 x 42.5" },
+      "14": { tamanho: "75 x 50" },
+      "16": { tamanho: "74 x 42.5" },
+      "20": { tamanho: "99 x 20" },
+      "23": { tamanho: "65 x 78" },
+      "25": { tamanho: "83 x 51" },
+      "26": { tamanho: "111 x 68" },
+      "27": { tamanho: "117 x 73" },
+      "28": { tamanho: "87 x 35" },
+      "30": { tamanho: "66 x 50" },
+      "31": { tamanho: "86 x 100" },
+      "33": { tamanho: "111 x 73" },
+      "34": { tamanho: "67.5 x 42.5" },
+      "35": { tamanho: "108 x 20" },
+      "36": { tamanho: "52 x 50" },
+      "37": { tamanho: "74 x 50" },
+      "38": { tamanho: "83 x 38" }
+    }
+  },
+  tampas: {
+    "1503685": {
+      "1": { tamanho: "69 x 78" },
+      "2": { tamanho: "89 x 78" }
+    },
+    "1600100": {
+      "1": { tamanho: "92 x 58" }
+    },
+    "1501826": {
+      "8":  { tamanho: "83.5 x 78" },
+      "2":  { tamanho: "64.5 x 78" },
+      "10": { tamanho: "105 x 58" },
+      "4":  { tamanho: "93 x 78" },
+      "7":  { tamanho: "91.5 x 58" },
+      "9":  { tamanho: "87 x 58" },
+      "6":  { tamanho: "94 x 58" }
+    },
+    "1500767": { "3": { tamanho: "95 x 78" } },
+    "1500768": { "6": { tamanho: "91.5 x 58" } },
+    "1500483": { "3": { tamanho: "101 x 58" } }
+  },
+  laminacao: {
+    "175813-4":  { "01":  { tamanho: "87.5 x 78" } },
+    "168383-4":  { "02":  { tamanho: "58.5 x 76" } },
+    "1121221-4": { "2.0": { tamanho: "70.5 x 37" } }
+  }
+};
+
+let banco = {};
+
+/* ================= ESTADO ================= */
+
+let estoque = {};
+let historico = [];
+
+function carregarDados() {
+  carregarBanco();
+  estoque = JSON.parse(localStorage.getItem("estoque")) || {};
+  historico = JSON.parse(localStorage.getItem("historico")) || [];
+
+  historico.forEach(h => {
+    if (h.tipo === "Entrada" && !h.id) {
+      h.id = Date.now() + Math.random();
+    }
+  });
+
+  // Modo escuro persistente
+  if (localStorage.getItem('modoEscuro') === 'true') {
+    document.body.classList.add('dark-mode');
+  }
+
+  salvarDados();
+  atualizarTabela();
+  atualizarHistorico();
+}
+
+function salvarDados() {
+  localStorage.setItem("estoque", JSON.stringify(estoque));
+  localStorage.setItem("historico", JSON.stringify(historico));
+}
+
+/* ================= BANCO NO LOCALSTORAGE (item 18) ================= */
+
+function carregarBanco() {
+  let salvo = localStorage.getItem("bancoCustom");
+  if (salvo) {
+    banco = JSON.parse(salvo);
+  } else {
+    // Primeira vez: copia o banco padrão
+    banco = JSON.parse(JSON.stringify(bancoPadrao));
+    localStorage.setItem("bancoCustom", JSON.stringify(banco));
+  }
+}
+
+function salvarBanco() {
+  localStorage.setItem("bancoCustom", JSON.stringify(banco));
+}
+
+let selecionado = null;
+let ultimoItem = null;
+let backup = null;
+
+let ordemEstoque = { coluna: null, asc: true };
+let filtroTipoEstoque = 0;
+let filtroTipoHistorico = 0;
+let ordemHistorico = { coluna: null, estado: 'none' };
+let filtroMovimentacao = 0;
+
+document.addEventListener("DOMContentLoaded", function () {
+  carregarDados();
+});
+
+/* ================= NAVEGAÇÃO ================= */
+
+window.mostrarTela = function(t){
+  document.getElementById("movimentar").classList.add("hidden");
+  document.getElementById("estoque").classList.add("hidden");
+  document.getElementById("historico").classList.add("hidden");
+  document.getElementById("detalhesTipo").classList.add("hidden");
+  document.getElementById(t).classList.remove("hidden");
+
+  document.querySelectorAll('.nav-top button').forEach(btn => btn.classList.remove('ativo'));
+  document.querySelector(`.nav-top button[onclick="mostrarTela('${t}')"]`).classList.add('ativo');
+
+  const btnExpandir = document.getElementById("btnExpandir");
+  if (t === "movimentar") {
+    btnExpandir.style.visibility = "hidden";
+    btnExpandir.style.pointerEvents = "none";
+  } else {
+    btnExpandir.style.visibility = "visible";
+    btnExpandir.style.pointerEvents = "auto";
+  }
+
+  atualizarTabela();
+  atualizarHistorico();
+}
+
+/* ================= CLASSIFICAÇÃO ================= */
+
+function classificar(item){
+  if(item.startsWith("2000047")) return "brf";
+  if(item.includes("-4")) return "laminacao";
+  return "tampas";
+}
+
+/* ================= FILTRO POR TIPO ================= */
+
+function filtrarPorTipo(){
+  itemSelect.innerHTML='<option value="">Selecionar item</option>';
+  versaoSelect.innerHTML='<option value="">Selecionar versão</option>';
+  let tipo = tipoSelect.value;
+  if(!banco[tipo]) return;
+  Object.keys(banco[tipo]).forEach(item=>{
+    let opt = document.createElement('option');
+    opt.value = item;
+    opt.textContent = item;
+    itemSelect.appendChild(opt);
+  });
+}
+
+itemSelect.addEventListener("change", function(){
+  versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
+  let tipo = tipoSelect.value;
+  let item = itemSelect.value;
+  if(!banco[tipo]) return;
+  if(!banco[tipo][item]) return;
+  Object.keys(banco[tipo][item]).forEach(v => {
+    let tamanho = banco[tipo][item][v].tamanho;
+    let opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v + " (" + tamanho + ")";
+    versaoSelect.appendChild(opt);
+  });
+  if (saldoAtual) saldoAtual.innerHTML = "";
+});
+
+function atualizarSaldoAtual(item, versao){
+  if(!item || !versao){
+    if(saldoAtual) saldoAtual.innerHTML = "";
+    return;
+  }
+  let identificador = item + " - V" + versao;
+  let saldo = estoque[identificador] || 0;
+  if(saldoAtual) saldoAtual.innerHTML = "Saldo atual: <strong>" + formatarPeso(saldo) + " kg</strong>";
+}
+
+versaoSelect.addEventListener("change", function(){
+  let tipo = tipoSelect.value;
+  let item = itemSelect.value;
+  let versao = versaoSelect.value;
+  if(versao !== ""){
+    atualizarSaldoAtual(item, versao);
+    let tamanho = "";
+    if (banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
+      tamanho = banco[tipo][item][versao].tamanho;
+    }
+    document.getElementById('buscaItem').value = item + " - V" + versao + " (" + tamanho + ")";
+    quantidade.focus();
+  } else {
+    if (saldoAtual) saldoAtual.innerHTML = "";
+    document.getElementById('buscaItem').value = '';
+  }
+});
+
+/* ================= BUSCA MANUAL ================= */
+
+function selecionarManual(){}
+
+function filtrar(){
+  let termo = buscaItem.value.toLowerCase();
+  sugestoes.innerHTML = '';
+  if(!termo){ sugestoes.classList.add('hidden'); return; }
+  Object.keys(banco).forEach(tipo => {
+    Object.keys(banco[tipo]).forEach(item => {
+      Object.keys(banco[tipo][item]).forEach(versao => {
+        let tamanho = banco[tipo][item][versao].tamanho;
+        let textoCompleto = item + " - V" + versao + " (" + tamanho + ")";
+        if(textoCompleto.toLowerCase().includes(termo)){
+          let d = document.createElement('div');
+          d.textContent = textoCompleto;
+          d.onclick = function(){
+            tipoSelect.value = tipo;
+            filtrarPorTipo();
+            itemSelect.value = item;
+            itemSelect.dispatchEvent(new Event("change"));
+            versaoSelect.value = versao;
+            atualizarSaldoAtual(item, versao);
+            buscaItem.value = textoCompleto;
+            sugestoes.classList.add('hidden');
+            quantidade.focus();
+          };
+          sugestoes.appendChild(d);
+        }
+      });
+    });
+  });
+  sugestoes.classList.remove('hidden');
+}
+
+function limparBusca(){
+  buscaItem.value = '';
+  sugestoes.innerHTML = '';
+  sugestoes.classList.add('hidden');
+  tipoSelect.value = '';
+  itemSelect.innerHTML = '<option value="">Selecionar item</option>';
+  versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
+  quantidade.value = '';
+  document.getElementById('buscaItem').value = '';
+  if(saldoAtual) saldoAtual.innerHTML = "";
+}
+
+/* ================= REPETIR ÚLTIMO ================= */
+
+function usarUltimo(){
+  if(!ultimoItem){ mostrarToast('Nenhum item recente', 'erro'); return; }
+  if(!ultimoItem.includes(" - V")){ mostrarToast('Último item sem versão registrada', 'erro'); return; }
+  let partes = ultimoItem.split(" - V");
+  let item = partes[0];
+  let versao = partes[1];
+  let tipoEncontrado = null;
+  Object.keys(banco).forEach(tipo => { if(banco[tipo][item]) tipoEncontrado = tipo; });
+  if(!tipoEncontrado){ mostrarToast('Item não encontrado no banco', 'erro'); return; }
+  tipoSelect.value = tipoEncontrado;
+  filtrarPorTipo();
+  itemSelect.value = item;
+  versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
+  Object.keys(banco[tipoEncontrado][item]).forEach(v => {
+    let tamanho = banco[tipoEncontrado][item][v].tamanho;
+    let opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v + " (" + tamanho + ")";
+    versaoSelect.appendChild(opt);
+  });
+  versaoSelect.value = versao;
+  let identificador = item + " - V" + versao;
+  let saldo = estoque[identificador] || 0;
+  if(saldoAtual) saldoAtual.innerHTML = "Saldo atual: <strong>" + formatarPeso(saldo) + " kg</strong>";
+  let tamanho = "";
+  if (banco[tipoEncontrado][item] && banco[tipoEncontrado][item][versao]) {
+    tamanho = banco[tipoEncontrado][item][versao].tamanho;
+  }
+  document.getElementById('buscaItem').value = item + " - V" + versao + " (" + tamanho + ")";
+  quantidade.value = '';
+  quantidade.focus();
+}
+
+/* ================= MOVIMENTAÇÃO ================= */
+
+function movimentar(tipoMov){
+  let tipo = tipoSelect.value;
+  let item = itemSelect.value;
+  let versao = versaoSelect.value;
+  let faltando = [];
+  if(!tipo) faltando.push("tipo");
+  if(!item) faltando.push("item");
+  if(!versao) faltando.push("versão");
+  if(faltando.length > 0){ mostrarToast("Insira: " + faltando.join(", "), 'erro'); return; }
+  let qtd = parseFloat(quantidade.value);
+  if(!qtd){ mostrarToast("Informe o peso", 'erro'); return; }
+  let identificador = item + " - V" + versao;
+  if(!estoque[identificador]) estoque[identificador] = 0;
+
+  salvarEstadoParaDesfazer();
+
+  if(tipoMov === 'remove'){
+    if(!estoque[identificador] || estoque[identificador] <= 0){ mostrarToast("Sem saldo disponível", 'erro'); return; }
+    if(qtd > estoque[identificador]){ mostrarToast("Peso maior que o saldo disponível", 'erro'); return; }
+    abrirModalSaida(identificador, qtd);
+    return;
+  } else {
+    estoque[identificador] += qtd;
+    if (!estoque[identificador + '_qtd']) estoque[identificador + '_qtd'] = 0;
+    estoque[identificador + '_qtd']++;
+  }
+
+  historico.push({
+    id: Date.now() + Math.random(),
+    data: new Date().toLocaleString(),
+    tipo: tipoMov === 'add' ? 'Entrada' : 'Saída',
+    item: identificador,
+    qtd: qtd
+  });
+
+  ultimoItem = identificador;
+  salvarDados();
+  atualizarTabela();
+  atualizarHistorico();
+
+  tipoSelect.value = '';
+  itemSelect.innerHTML = '<option value="">Selecionar item</option>';
+  versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
+  quantidade.value = '';
+  document.getElementById('buscaItem').value = '';
+  sugestoes.innerHTML = '';
+  sugestoes.classList.add('hidden');
+  if(saldoAtual) saldoAtual.innerHTML = "";
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast(identificador + (tipoMov === 'add' ? " adicionado" : " removido"));
+}
+
+/* ================= ESTOQUE ================= */
+
+function ordenarEstoque(coluna) {
+  if (coluna === 'tipo') {
+    filtroTipoEstoque++;
+    if (filtroTipoEstoque > 3) filtroTipoEstoque = 0;
+    let thTipo = document.querySelector('#estoque thead th[onclick="ordenarEstoque(\'tipo\')"]');
+    if (thTipo) {
+      let letras = ['', 'B', 'T', '1ª'];
+      thTipo.innerHTML = 'Tipo<span class="sort-arrow">' + (letras[filtroTipoEstoque] ? ' (' + letras[filtroTipoEstoque] + ')' : '') + '</span>';
+    }
+    atualizarTabela();
+    return;
+  }
+  if (ordemEstoque.coluna === coluna) { ordemEstoque.asc = !ordemEstoque.asc; }
+  else { ordemEstoque.coluna = coluna; ordemEstoque.asc = true; }
+  document.querySelectorAll('#estoque thead th.sortable').forEach(th => {
+    if (!th.getAttribute('onclick').includes('tipo')) {
+      th.classList.remove('asc', 'desc', 'none');
+      th.classList.add('none');
+    }
+  });
+  const thAtivo = document.querySelector(`#estoque thead th[onclick="ordenarEstoque('${coluna}')"]`);
+  if (thAtivo) { thAtivo.classList.remove('none'); thAtivo.classList.add(ordemEstoque.asc ? 'asc' : 'desc'); }
+  atualizarTabela();
+}
+
+function atualizarTabela(){
+  const tabela = document.getElementById('tabela');
+  tabela.innerHTML='';
+  let termo = document.getElementById('buscaEstoque').value.toLowerCase();
+  let pesoTotal = 0, totalBrf = 0, totalTampas = 0, totalLaminacao = 0;
+
+  let dados = Object.keys(estoque)
+    .filter(i => !i.endsWith('_qtd'))
+    .map(i => {
+      let partes = i.split(" - ");
+      if (partes.length < 2) return null;
+      let item = partes[0];
+      let versao = partes[1].replace("V", "").trim();
+      let tipoEncontrado = "";
+      Object.keys(banco).forEach(tipo => { if (banco[tipo] && banco[tipo][item]) tipoEncontrado = tipo; });
+      if (!banco[tipoEncontrado] || !banco[tipoEncontrado][item] || !banco[tipoEncontrado][item][versao]) return null;
+      let tamanho = banco[tipoEncontrado][item][versao].tamanho;
+      let peso = estoque[i];
+      let quantidadeEntradas = estoque[i + '_qtd'] || 0;
+      if (quantidadeEntradas === 0 && estoque[i] > 0) {
+        let entradasItem = historico.filter(h => h.item === i && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
+        let somaTemp = 0;
+        for (let idx = entradasItem.length - 1; idx >= 0; idx--) {
+          if (somaTemp >= estoque[i]) break;
+          somaTemp += entradasItem[idx].qtd;
+          quantidadeEntradas++;
+        }
+        if (quantidadeEntradas === 0) quantidadeEntradas = 1;
+      }
+      pesoTotal += peso;
+      if (tipoEncontrado === "brf") totalBrf += peso;
+      if (tipoEncontrado === "tampas") totalTampas += peso;
+      if (tipoEncontrado === "laminacao") totalLaminacao += peso;
+      return { identificador: i, tipo: tipoEncontrado, item, versao, tamanho, peso, qtdEntradas: quantidadeEntradas };
+    })
+    .filter(d => d !== null)
+    .filter(d => `${d.tipo} ${d.item} ${d.versao} ${d.tamanho} ${d.peso}`.toLowerCase().includes(termo));
+
+  if (filtroTipoEstoque > 0) {
+    let prioridades = [null, 'brf', 'tampas', 'laminacao'];
+    let tipoPrioritario = prioridades[filtroTipoEstoque];
+    dados.sort((a, b) => {
+      let aPri = (a.tipo === tipoPrioritario) ? 0 : 1;
+      let bPri = (b.tipo === tipoPrioritario) ? 0 : 1;
+      if (aPri !== bPri) return aPri - bPri;
+      let ordem = { 'brf': 1, 'tampas': 2, 'laminacao': 3 };
+      return (ordem[a.tipo] || 4) - (ordem[b.tipo] || 4);
+    });
+  }
+
+  if(ordemEstoque.coluna){
+    dados.sort((a,b)=>{
+      let v1 = a[ordemEstoque.coluna], v2 = b[ordemEstoque.coluna];
+      if(ordemEstoque.coluna === "tamanho"){
+        let p1 = v1.split(" x "), p2 = v2.split(" x ");
+        let l1 = parseFloat(p1[0]), l2 = parseFloat(p2[0]);
+        let a1 = parseFloat(p1[1]), a2 = parseFloat(p2[1]);
+        if(l1 !== l2) return ordemEstoque.asc ? l1-l2 : l2-l1;
+        return ordemEstoque.asc ? a1-a2 : a2-a1;
+      }
+      if (ordemEstoque.coluna === "peso" || ordemEstoque.coluna === "qtdEntradas") { v1 = Number(v1); v2 = Number(v2); }
+      else { if (typeof v1==="string") v1=v1.toLowerCase(); if (typeof v2==="string") v2=v2.toLowerCase(); }
+      if (v1>v2) return ordemEstoque.asc?1:-1;
+      if (v1<v2) return ordemEstoque.asc?-1:1;
+      return 0;
+    });
+  }
+
+  if(totalGeralLabel) totalGeralLabel.innerHTML = formatarPeso(pesoTotal) + " kg";
+  let totalBobinasLabel = document.getElementById("totalBobinas");
+  let totalBobinasCount = dados.reduce((acc, d) => acc + d.qtdEntradas, 0);
+  if(totalBobinasLabel) totalBobinasLabel.textContent = totalBobinasCount + " bobinas";
+  if(totalBrfLabel) totalBrfLabel.innerHTML = formatarPeso(totalBrf) + " kg";
+  if(totalTampasLabel) totalTampasLabel.innerHTML = formatarPeso(totalTampas) + " kg";
+  if(totalLaminacaoLabel) totalLaminacaoLabel.innerHTML = formatarPeso(totalLaminacao) + " kg";
+
+  let percBrf = pesoTotal ? (totalBrf/pesoTotal)*100 : 0;
+  let percTampas = pesoTotal ? (totalTampas/pesoTotal)*100 : 0;
+  let percLaminacao = pesoTotal ? (totalLaminacao/pesoTotal)*100 : 0;
+
+  function atualizarBarra(barra, percentual) {
+    let valor = Math.round(percentual);
+    if (valor === 0) { barra.style.width="0%"; barra.textContent=""; barra.style.paddingLeft="0"; return; }
+    barra.style.width = valor+"%"; barra.textContent = valor+"%"; barra.style.paddingLeft = "6px";
+  }
+
+  if (barraBrf) atualizarBarra(barraBrf, percBrf);
+  if (barraTampas) atualizarBarra(barraTampas, percTampas);
+  if (barraLaminacao) atualizarBarra(barraLaminacao, percLaminacao);
+
+  let html = '';
+  dados.forEach(d=>{
+    html += `
+      <tr>
+        <td>${nomeBonitoTipo(d.tipo)}</td>
+        <td>${d.item}</td>
+        <td>${d.versao}</td>
+        <td>${d.tamanho}</td>
+        <td>${d.peso}</td>
+        <td>${d.qtdEntradas}</td>
+        <td><button class='btn-remove' onclick="remover('${d.identificador}')">🗑</button></td>
+      </tr>
+    `;
+  });
+  tabela.innerHTML = html;
+}
+
+function remover(item){
+  if(!confirm("Tem certeza que deseja remover este item do estoque?")) return;
+
+  salvarEstadoParaDesfazer();
+
+  backup = { tipo: 'estoque', item, valor: estoque[item], qtd: estoque[item + '_qtd'] };
+
+  let entradasParaExcluir = historico.filter(h =>
+    h.item === item && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque
+  );
+
+  entradasParaExcluir.forEach(h => {
+    h._removidaEstoque = true;
+    historico.push({
+      id: Date.now() + Math.random(),
+      data: new Date().toLocaleString(),
+      tipo: 'Exclusão',
+      item: item,
+      qtd: h.qtd,
+      refEntradaId: h.id || null,
+      refEntradaData: h.data || null
+    });
+  });
+
+  delete estoque[item];
+  delete estoque[item + '_qtd'];
+
+  salvarDados();
+  atualizarTabela();
+  atualizarHistorico();
+
+  mostrarToast('Item removido');
+}
+
+/* ================= HISTÓRICO ================= */
+
+function ordenarHistorico(coluna) {
+  if (coluna === 'tipo') {
+    filtroTipoHistorico++;
+    if (filtroTipoHistorico > 3) filtroTipoHistorico = 0;
+    let thTipo = document.querySelector('#historico thead th[onclick="ordenarHistorico(\'tipo\')"]');
+    if (thTipo) {
+      let letras = ['', 'B', 'T', '1ª'];
+      thTipo.innerHTML = 'Tipo<span class="sort-arrow">' + (letras[filtroTipoHistorico] ? ' (' + letras[filtroTipoHistorico] + ')' : '') + '</span>';
+    }
+    atualizarHistorico();
+    return;
+  }
+  if (coluna === 'movimentacao') {
+    filtroMovimentacao++;
+    if (filtroMovimentacao > 4) filtroMovimentacao = 0;
+    let thMov = document.querySelector('#historico thead th[onclick="ordenarHistorico(\'movimentacao\')"]');
+    if (thMov) {
+      let letras = ['', 'E', 'S', 'C', 'P'];
+      thMov.innerHTML = 'Mov.<span class="sort-arrow">' + (letras[filtroMovimentacao] ? ' (' + letras[filtroMovimentacao] + ')' : '') + '</span>';
+    }
+    atualizarHistorico();
+    return;
+  }
+  if (ordemHistorico.coluna === coluna) {
+    if (ordemHistorico.estado === 'none') ordemHistorico.estado = 'asc';
+    else if (ordemHistorico.estado === 'asc') ordemHistorico.estado = 'desc';
+    else { ordemHistorico.estado = 'none'; ordemHistorico.coluna = null; }
+  } else { ordemHistorico.coluna = coluna; ordemHistorico.estado = 'asc'; }
+
+  document.querySelectorAll('#historico thead th.sortable').forEach(th => {
+    if (!th.getAttribute('onclick').includes('movimentacao')) {
+      th.classList.remove('asc', 'desc', 'none');
+      th.classList.add('none');
+    }
+  });
+  if (ordemHistorico.coluna) {
+    const thAtivo = document.querySelector(`#historico thead th[onclick="ordenarHistorico('${coluna}')"]`);
+    if (thAtivo) { thAtivo.classList.remove('none'); thAtivo.classList.add(ordemHistorico.estado); }
+  }
+  atualizarHistorico();
+}
+
+function atualizarHistorico(){
+  const historicoTabela = document.getElementById('historicoTabela');
+  historicoTabela.innerHTML = '';
+  let termo = normalizarTexto(document.getElementById('buscaHistorico').value);
+
+  let dados = historico.map(h => {
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return null;
+    let item = partes[0], versao = partes[1];
+    let tipoEncontrado = "";
+    Object.keys(banco).forEach(tipo => { if(banco[tipo][item]) tipoEncontrado = tipo; });
+    let tamanho = "";
+    if (banco[tipoEncontrado] && banco[tipoEncontrado][item] && banco[tipoEncontrado][item][versao]) {
+      tamanho = banco[tipoEncontrado][item][versao].tamanho;
+    }
+    return { original: h, data: h.data.replace(", ", "<br>"), movimentacao: h.tipo, tipo: tipoEncontrado, item, versao, tamanho, qtd: h.qtd };
+  }).filter(d => {
+    if (!d) return false;
+    let termosMovimento = [d.original.tipo || '', d.movimentacao || ''];
+    if (d.original.tipo === 'Entrada') {
+      termosMovimento.push('entrada');
+      if (d.original.consumida) termosMovimento.push('entrada consumida', 'consumida', 'consumo');
+      if (d.original._removidaEstoque || d.original.excluida) termosMovimento.push('entrada excluida', 'excluida', 'exclusao', 'exclusão');
+    }
+    if (d.original.tipo === 'Consumo') termosMovimento.push('consumo', 'consumida');
+    if (d.original.tipo === 'Consumo parcial') termosMovimento.push('consumo parcial', 'cons parcial', 'parcial');
+    if (d.original.tipo === 'Exclusão') termosMovimento.push('exclusao', 'exclusão', 'excluida', 'excluída');
+    if (d.original.tipo === 'Saída') {
+      termosMovimento.push('saida', 'saída');
+      if (d.original.consumida) termosMovimento.push('consumo', 'consumida');
+      if (d.original.excluida) termosMovimento.push('exclusao', 'exclusão', 'excluida', 'excluída');
+    }
+    let textoCompleto = normalizarTexto(`${d.data} ${termosMovimento.join(' ')} ${nomeBonitoTipo(d.tipo)} ${d.item} ${d.versao} ${d.tamanho} ${d.qtd}`);
+    let matchesBusca = textoCompleto.includes(termo);
+    let dataISO = d.data.split(",")[0].split("/").reverse().join("-");
+    let matchesPeriodo = true;
+    if(dataInicio && dataInicio.value) matchesPeriodo = matchesPeriodo && (dataISO >= dataInicio.value);
+    if(dataFim && dataFim.value) matchesPeriodo = matchesPeriodo && (dataISO <= dataFim.value);
+    return matchesBusca && matchesPeriodo;
+  });
+
+  dados.reverse();
+
+  if (filtroTipoHistorico > 0) {
+    let prioridades = [null, 'brf', 'tampas', 'laminacao'];
+    let tipoPrioritario = prioridades[filtroTipoHistorico];
+    dados.sort((a, b) => {
+      let aPri = (a.tipo === tipoPrioritario) ? 0 : 1;
+      let bPri = (b.tipo === tipoPrioritario) ? 0 : 1;
+      if (aPri !== bPri) return aPri - bPri;
+      let ordem = { 'brf': 1, 'tampas': 2, 'laminacao': 3 };
+      return (ordem[a.tipo] || 4) - (ordem[b.tipo] || 4);
+    });
+  }
+
+  if (filtroMovimentacao > 0) {
+    let ordemMov = { 'Entrada': 1, 'Saída': 2, 'Consumida': 3, 'Consumo parcial': 4 };
+    let prioridades = [null, 'Entrada', 'Saída', 'Consumida', 'Consumo parcial'];
+    let tipoPrioritario = prioridades[filtroMovimentacao];
+    dados.sort((a, b) => {
+      let tipoA = a.original.tipo, tipoB = b.original.tipo;
+      if (a.original.consumida && tipoA !== 'Consumo parcial') tipoA = 'Consumida';
+      if (b.original.consumida && tipoB !== 'Consumo parcial') tipoB = 'Consumida';
+      let aPrioritario = (tipoA === tipoPrioritario) ? 0 : 1;
+      let bPrioritario = (tipoB === tipoPrioritario) ? 0 : 1;
+      if (aPrioritario !== bPrioritario) return aPrioritario - bPrioritario;
+      return (ordemMov[tipoA] || 5) - (ordemMov[tipoB] || 5);
+    });
+  }
+
+  if (ordemHistorico.coluna && ordemHistorico.estado !== 'none') {
+    const asc = ordemHistorico.estado === 'asc';
+    dados.sort((a, b) => {
+      let v1 = a[ordemHistorico.coluna], v2 = b[ordemHistorico.coluna];
+      if (ordemHistorico.coluna === 'movimentacao') {
+        const ordem = { 'Entrada': 1, 'Saída': 2, 'Consumida': 3, 'Consumo parcial': 4 };
+        let o1 = ordem[a.original.consumida ? 'Consumida' : a.original.tipo] || 5;
+        let o2 = ordem[b.original.consumida ? 'Consumida' : b.original.tipo] || 5;
+        if (a.original.tipo === 'Consumo parcial') o1 = ordem['Consumo parcial'];
+        if (b.original.tipo === 'Consumo parcial') o2 = ordem['Consumo parcial'];
+        if (o1 !== o2) return asc ? o1-o2 : o2-o1;
+        return 0;
+      }
+      if (ordemHistorico.coluna === 'tamanho') {
+        let p1=v1.split(" x "), p2=v2.split(" x ");
+        let l1=parseFloat(p1[0]), l2=parseFloat(p2[0]), a1=parseFloat(p1[1]), a2=parseFloat(p2[1]);
+        if (l1!==l2) return asc?l1-l2:l2-l1;
+        return asc?a1-a2:a2-a1;
+      }
+      if (ordemHistorico.coluna === 'qtd') { v1=Number(v1); v2=Number(v2); }
+      else { v1=String(v1).toLowerCase(); v2=String(v2).toLowerCase(); }
+      if (v1>v2) return asc?1:-1;
+      if (v1<v2) return asc?-1:1;
+      return 0;
+    });
+  }
+
+  let html = '';
+  dados.forEach(d => {
+    let indexReal = historico.indexOf(d.original);
+    let corLinha = '', movTexto = '', refTexto = '';
+
+    function montarRef(refData) {
+      if (!refData) return '';
+      let partes = refData.split(", ");
+      return `<span class="ref-texto">ref: ${partes[0] || ''}<br>${partes[1] || ''}</span>`;
+    }
+
+    switch (d.original.tipo) {
+      case 'Entrada':
+        corLinha = 'linha-entrada';
+        movTexto = 'Entrada';
+        if (d.original.consumida) movTexto += `<span class="entrada-status">(consumida)</span>`;
+        else if (d.original._removidaEstoque || d.original.excluida) movTexto += `<span class="entrada-status">(excluída)</span>`;
+        break;
+      case 'Consumo':
+        corLinha = 'linha-consumida';
+        movTexto = 'Consumo';
+        refTexto = montarRef(d.original.refEntradaData);
+        break;
+      case 'Consumo parcial':
+        corLinha = 'linha-consumo-parcial';
+        movTexto = 'Cons. parcial';
+        refTexto = montarRef(d.original.refEntradaData);
+        break;
+      case 'Exclusão':
+        corLinha = 'linha-excluida';
+        movTexto = 'Exclusão';
+        refTexto = montarRef(d.original.refEntradaData);
+        break;
+      case 'Saída':
+      default:
+        corLinha = 'linha-saida';
+        movTexto = 'Saída';
+        if (d.original.consumida) { corLinha = 'linha-consumida'; movTexto = 'Consumo'; }
+        else if (d.original.excluida) {
+          corLinha = 'linha-excluida';
+          movTexto = 'Exclusão';
+          if (d.original.bobinaOriginalId) {
+            let refOriginal = historico.find(h => h.id === d.original.bobinaOriginalId && h.tipo === "Entrada");
+            if (refOriginal) refTexto = montarRef(refOriginal.data);
+          }
+        }
+        break;
+    }
+
+html += `
+  <tr class="${corLinha}">
+    <td>${d.data}</td>
+    <td>${movTexto}${refTexto}</td>
+    <td>${nomeBonitoTipo(d.tipo)}</td>
+    <td>${d.item}<br><strong>V ${d.versao}</strong><br><span style="font-size:11px;">${d.tamanho}</span></td>
+    <td>${d.original.qtdOriginal ? Math.round(d.qtd)+'/'+Math.round(d.original.qtdOriginal) : d.qtd}</td>
+    <td><button class='btn-menu-historico' onclick="abrirAcoesHistorico(${indexReal})">⋮</button></td>
+  </tr>
+`;
+  });
+  historicoTabela.innerHTML = html;
+}
+
+/* ================= EXPORTAÇÃO EXCEL ================= */
+
+function exportarParaExcel(nomeArquivo, dados){
+  if(dados.length === 0){ mostrarToast("Nenhum dado para exportar!", 'erro'); return; }
+  let tabela = "<table border='1'><tr>";
+  Object.keys(dados[0]).forEach(chave=>{ tabela += "<th>" + chave + "</th>"; });
+  tabela += "</tr>";
+  dados.forEach(linha=>{
+    tabela += "<tr>";
+    Object.values(linha).forEach(valor=>{ tabela += "<td>" + valor + "</td>"; });
+    tabela += "</tr>";
+  });
+  tabela += "</table>";
+  let blob = new Blob([tabela], { type: "application/vnd.ms-excel" });
+  let link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = nomeArquivo + ".xls";
+  link.click();
+}
+
+let tipoExportacaoAtual = '';
+
+function ajustarOpcaoPeriodo() {
+  const tipoSelecionado = document.querySelector('input[name="tipoDados"]:checked');
+  const blocoPeriodo = document.getElementById("blocoPeriodo");
+  const areaPeriodo = document.getElementById("areaPeriodo");
+  const radioTudo = document.querySelector('input[name="tipoPeriodo"][value="tudo"]');
+  if (!tipoSelecionado) return;
+  if (tipoSelecionado.value === "backup") {
+    if (blocoPeriodo) blocoPeriodo.style.display = "none";
+    if (areaPeriodo) areaPeriodo.classList.add("hidden");
+    if (radioTudo) radioTudo.checked = true;
+  } else {
+    if (blocoPeriodo) blocoPeriodo.style.display = "block";
+  }
+}
+
+window.togglePeriodo = function(show){
+  const area = document.getElementById("areaPeriodo");
+  const tipoSelecionado = document.querySelector('input[name="tipoDados"]:checked');
+  if (!area) return;
+  if (tipoSelecionado && tipoSelecionado.value === "backup") { area.classList.add("hidden"); return; }
+  if(show) area.classList.remove("hidden"); else area.classList.add("hidden");
+};
+
+window.executarExportacao = function(){
+  const radioDados = document.querySelector('input[name="tipoDados"]:checked');
+  const radioPeriodo = document.querySelector('input[name="tipoPeriodo"]:checked');
+  if (!radioDados || !radioPeriodo) return;
+  const tipoDados = radioDados.value, tipoPeriodo = radioPeriodo.value;
+  let dataInicioExp = null, dataFimExp = null;
+  if (tipoPeriodo === 'periodo') {
+    dataInicioExp = document.getElementById("exportDataInicio").value;
+    dataFimExp = document.getElementById("exportDataFim").value;
+  }
+  const formatoSelecionado = document.querySelector('input[name="formatoExport"]:checked');
+  const formato = formatoSelecionado ? formatoSelecionado.value : 'excel';
+
+  if (tipoDados === 'qrcodes') {
+    if (formato === 'imagens') {
+      exportarQRCodesZIP(dataInicioExp, dataFimExp);
+    } else {
+      exportarQRCodes(dataInicioExp, dataFimExp);
+    }
+    fecharModalConfig();
+    return;
+  }
+
+  if (formato === 'pdf') {
+    if (tipoDados === 'estoque') exportarEstoquePDF(dataInicioExp, dataFimExp);
+    if (tipoDados === 'historico') exportarHistoricoPDF(dataInicioExp, dataFimExp);
+    if (tipoDados === 'ambos') { exportarEstoquePDF(dataInicioExp, dataFimExp); exportarHistoricoPDF(dataInicioExp, dataFimExp); }
+  } else {
+    if (tipoDados === 'estoque') exportarEstoque(dataInicioExp, dataFimExp);
+    if (tipoDados === 'historico') exportarHistorico(dataInicioExp, dataFimExp);
+    if (tipoDados === 'ambos') exportarAmbos(dataInicioExp, dataFimExp);
+    if (tipoDados === 'backup') exportarBackup();
+  }
+  fecharModalConfig();
+}
+
+function getTimestamp(){
+  const agora = new Date();
+  return agora.getFullYear() + "-" + String(agora.getMonth()+1).padStart(2,"0") + "-" + String(agora.getDate()).padStart(2,"0") + "_" + String(agora.getHours()).padStart(2,"0") + "-" + String(agora.getMinutes()).padStart(2,"0");
+}
+
+function exportarEstoque(dataInicioP, dataFimP){
+  const wb = XLSX.utils.book_new();
+  let dadosEstoque = [];
+  Object.keys(estoque).forEach(chave => {
+    if (chave.endsWith('_qtd')) return;
+    let partes = chave.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: estoque[chave] });
+  });
+  const wsEstoque = XLSX.utils.json_to_sheet(dadosEstoque);
+  wsEstoque['!autofilter'] = { ref: wsEstoque['!ref'] };
+  wsEstoque['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }];
+  XLSX.utils.book_append_sheet(wb, wsEstoque, "Estoque");
+  XLSX.writeFile(wb, "Estoque_" + getTimestamp() + ".xlsx");
+}
+
+function exportarHistorico(dataInicioP, dataFimP){
+  const wb = XLSX.utils.book_new();
+  let dadosHistorico = historico.filter(h => {
+    if(!dataInicioP && !dataFimP) return true;
+    let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
+    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
+  }).map(h => {
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return null;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    let ref = h.refEntradaData || '';
+    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd, Ref: ref };
+  }).filter(d => d !== null);
+  const wsHistorico = XLSX.utils.json_to_sheet(dadosHistorico);
+  wsHistorico['!autofilter'] = { ref: wsHistorico['!ref'] };
+  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
+  XLSX.utils.book_append_sheet(wb, wsHistorico, "Histórico");
+  XLSX.writeFile(wb, "Historico_" + getTimestamp() + ".xlsx");
+}
+
+function exportarAmbos(dataInicioP, dataFimP){
+  const wb = XLSX.utils.book_new();
+  let dadosEstoque = [];
+  Object.keys(estoque).forEach(chave => {
+    if (chave.endsWith('_qtd')) return;
+    let partes = chave.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: estoque[chave] });
+  });
+  const wsEstoque = XLSX.utils.json_to_sheet(dadosEstoque);
+  wsEstoque['!autofilter'] = { ref: wsEstoque['!ref'] };
+  wsEstoque['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }];
+  XLSX.utils.book_append_sheet(wb, wsEstoque, "Estoque");
+
+  let dadosHistorico = historico.filter(h => {
+    if(!dataInicioP && !dataFimP) return true;
+    let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
+    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
+  }).map(h => {
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return null;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    let ref = h.refEntradaData || '';
+    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd, Ref: ref };
+  }).filter(d => d !== null);
+  const wsHistorico = XLSX.utils.json_to_sheet(dadosHistorico);
+  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
+  XLSX.utils.book_append_sheet(wb, wsHistorico, "Histórico");
+  XLSX.writeFile(wb, "Estoque_Historico_" + getTimestamp() + ".xlsx");
+}
+
+/* ================= EXPORTAÇÃO PDF ================= */
+
+function exportarEstoquePDF(dataInicioP, dataFimP) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const agora = new Date().toLocaleString('pt-BR');
+
+  doc.setFillColor(30, 58, 138);
+  doc.rect(0, 0, doc.internal.pageSize.width, 18, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Conferência de Estoques — Estoque', 14, 12);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Gerado em: ' + agora, doc.internal.pageSize.width - 14, 12, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
+
+  let dadosEstoque = [];
+  Object.keys(estoque).forEach(chave => {
+    if (chave.endsWith('_qtd')) return;
+    let partes = chave.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    dadosEstoque.push([nomeBonitoTipo(tipoInterno), item, versao, tamanho, String(estoque[chave])]);
+  });
+
+  if (dadosEstoque.length === 0) { mostrarToast('Nenhum dado para exportar', 'erro'); return; }
+
+  doc.autoTable({
+    startY: 22,
+    head: [['Tipo', 'Item', 'Versão', 'Medidas', 'Kg']],
+    body: dadosEstoque,
+    styles: { fontSize: 9, cellPadding: 3 },
+    headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [240, 244, 255] },
+    columnStyles: {
+      0: { cellWidth: 25 },
+      1: { cellWidth: 35 },
+      2: { cellWidth: 20 },
+      3: { cellWidth: 35 },
+      4: { cellWidth: 20 }
+    }
+  });
+
+  doc.save("Estoque_" + getTimestamp() + ".pdf");
+}
+
+function exportarHistoricoPDF(dataInicioP, dataFimP) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const agora = new Date().toLocaleString('pt-BR');
+
+  doc.setFillColor(30, 58, 138);
+  doc.rect(0, 0, doc.internal.pageSize.width, 18, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Conferência de Estoques — Histórico', 14, 12);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Gerado em: ' + agora, doc.internal.pageSize.width - 14, 12, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
+
+  let dadosHistorico = historico.filter(h => {
+    if (!dataInicioP && !dataFimP) return true;
+    let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
+    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
+  }).map(h => {
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return null;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    let ref = h.refEntradaData || '';
+    return [h.data, h.tipo, nomeBonitoTipo(tipoInterno), item, versao, tamanho, String(h.qtd), ref];
+  }).filter(d => d !== null);
+
+  if (dadosHistorico.length === 0) { mostrarToast('Nenhum dado para exportar', 'erro'); return; }
+
+  doc.autoTable({
+    startY: 22,
+    head: [['Data', 'Movimentação', 'Tipo', 'Item', 'Versão', 'Medidas', 'Kg', 'Ref']],
+    body: dadosHistorico,
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [240, 244, 255] },
+    columnStyles: {
+      0: { cellWidth: 34 },
+      1: { cellWidth: 26 },
+      2: { cellWidth: 16 },
+      3: { cellWidth: 26 },
+      4: { cellWidth: 14 },
+      5: { cellWidth: 24 },
+      6: { cellWidth: 14 },
+      7: { cellWidth: 34 }
+    }
+  });
+
+  doc.save("Historico_" + getTimestamp() + ".pdf");
+}
+
+/* ================= MODO VISUALIZAÇÃO ================= */
+
+function alternarModoVisualizacao() {
+  const telaEstoque = !document.getElementById("estoque").classList.contains("hidden");
+  const telaHistorico = !document.getElementById("historico").classList.contains("hidden");
+  if (!telaEstoque && !telaHistorico) return;
+  const body = document.body;
+  const botao = document.getElementById("btnExpandir");
+  body.classList.toggle("modo-visualizacao");
+  botao.textContent = body.classList.contains("modo-visualizacao") ? "✕" : "⛶";
+}
+
+if ('serviceWorker' in navigator && (location.protocol === 'http:' || location.protocol === 'https:')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => console.log('SW registrado:', reg))
+      .catch(err => console.error('Erro SW:', err));
+  });
+}
+
+/* ================= DETALHES POR TIPO ================= */
+
+let tipoDetalheAtual = null;
+let ordemDetalhes = { coluna: null, asc: true };
+
+function ordenarDetalhes(coluna) {
+  if (ordemDetalhes.coluna === coluna) { ordemDetalhes.asc = !ordemDetalhes.asc; }
+  else { ordemDetalhes.coluna = coluna; ordemDetalhes.asc = true; }
+  document.querySelectorAll('#detalhesTipo thead th.sortable').forEach(th => {
+    th.classList.remove('asc', 'desc', 'none'); th.classList.add('none');
+  });
+  const thAtivo = document.querySelector(`#detalhesTipo thead th[onclick="ordenarDetalhes('${coluna}')"]`);
+  if (thAtivo) { thAtivo.classList.remove('none'); thAtivo.classList.add(ordemDetalhes.asc ? 'asc' : 'desc'); }
+  atualizarDetalhes();
+}
+
+function abrirDetalhes(tipo) {
+  tipoDetalheAtual = tipo;
+  document.getElementById('estoque').classList.add('hidden');
+  document.getElementById('detalhesTipo').classList.remove('hidden');
+  document.getElementById('detalheTitulo').textContent = nomeCompletoTipo(tipo);
+  document.getElementById('buscaDetalhes').value = '';
+  ordemDetalhes = { coluna: null, asc: true };
+  document.querySelectorAll('#detalhesTipo thead th.sortable').forEach(th => {
+    th.classList.remove('asc', 'desc', 'none'); th.classList.add('none');
+  });
+  atualizarDetalhes();
+}
+
+function fecharDetalhes() {
+  tipoDetalheAtual = null;
+  document.getElementById('detalhesTipo').classList.add('hidden');
+  document.getElementById('estoque').classList.remove('hidden');
+  atualizarTabela();
+}
+
+function atualizarDetalhes() {
+  const tbody = document.getElementById('detalhesTabela');
+  tbody.innerHTML = '';
+  const termo = document.getElementById('buscaDetalhes').value.toLowerCase();
+  let pesoTotalAcumulado = 0, totalBobinas = 0;
+
+  let entradas = historico.filter(h => {
+    if (h.tipo !== "Entrada") return false;
+    if (h._removidaEstoque) return false;
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return false;
+    let item = partes[0];
+    let tipoEncontrado = "";
+    Object.keys(banco).forEach(t => { if (banco[t][item]) tipoEncontrado = t; });
+    if (tipoEncontrado !== tipoDetalheAtual) return false;
+    if (h.consumida) return true;
+    if (!estoque[h.item] || estoque[h.item] <= 0) return false;
+    return true;
+  });
+
+  let agrupado = {};
+  let todasEntradas = {};
+  entradas.forEach(h => {
+    if (!todasEntradas[h.item]) todasEntradas[h.item] = [];
+    todasEntradas[h.item].push(h);
+  });
+
+  Object.keys(todasEntradas).forEach(chave => {
+    let pesoAtual = estoque[chave] || 0;
+    let lista = todasEntradas[chave];
+    let consumidas = lista.filter(h => h.consumida);
+    let ativas = lista.filter(h => !h.consumida);
+    if (pesoAtual <= 0 && consumidas.length === 0) return;
+    let registrosSelecionados = [];
+    let soma = 0;
+    for (let i = ativas.length - 1; i >= 0; i--) {
+      if (soma >= pesoAtual) break;
+      registrosSelecionados.unshift(ativas[i]);
+      soma += ativas[i].qtd;
+    }
+    agrupado[chave] = { registros: [...consumidas, ...registrosSelecionados], total: pesoAtual };
+  });
+
+  Object.keys(estoque).filter(chave => !chave.endsWith('_qtd')).forEach(chave => {
+    let partes = chave.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0];
+    let tipoEncontrado = "";
+    Object.keys(banco).forEach(t => { if (banco[t] && banco[t][item]) tipoEncontrado = t; });
+    if (tipoEncontrado !== tipoDetalheAtual) return;
+    if (!agrupado[chave]) agrupado[chave] = { registros: [], total: estoque[chave] || 0, semHistorico: true };
+  });
+
+  let chavesOrdenadas = Object.keys(agrupado).filter(chave => {
+    let partes = chave.split(" - V");
+    let item = partes[0], versao = partes[1];
+    let tamanho = "";
+    if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][item] && banco[tipoDetalheAtual][item][versao]) {
+      tamanho = banco[tipoDetalheAtual][item][versao].tamanho;
+    }
+    return (`${item} ${versao} ${tamanho} ${agrupado[chave].total} ${agrupado[chave].registros.length}`.toLowerCase().includes(termo));
+  });
+
+  if (ordemDetalhes.coluna) {
+    chavesOrdenadas.sort((a, b) => {
+      let pA = a.split(" - V"), pB = b.split(" - V");
+      let itemA = pA[0], versaoA = pA[1], itemB = pB[0], versaoB = pB[1];
+      let v1, v2;
+      if (ordemDetalhes.coluna === 'item') { v1 = itemA.toLowerCase(); v2 = itemB.toLowerCase(); }
+      else if (ordemDetalhes.coluna === 'versao') { v1 = parseFloat(versaoA)||0; v2 = parseFloat(versaoB)||0; }
+      else if (ordemDetalhes.coluna === 'tamanho') {
+        let tA = "", tB = "";
+        if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][itemA] && banco[tipoDetalheAtual][itemA][versaoA]) tA = banco[tipoDetalheAtual][itemA][versaoA].tamanho;
+        if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][itemB] && banco[tipoDetalheAtual][itemB][versaoB]) tB = banco[tipoDetalheAtual][itemB][versaoB].tamanho;
+        let pA1 = tA.split(" x "), pB1 = tB.split(" x ");
+        let lA = parseFloat(pA1[0])||0, lB = parseFloat(pB1[0])||0, aA = parseFloat(pA1[1])||0, aB = parseFloat(pB1[1])||0;
+        if (lA !== lB) return ordemDetalhes.asc ? lA-lB : lB-lA;
+        return ordemDetalhes.asc ? aA-aB : aB-aA;
+      } else if (ordemDetalhes.coluna === 'peso') { v1 = agrupado[a].total; v2 = agrupado[b].total; }
+      else if (ordemDetalhes.coluna === 'qtd') { v1 = agrupado[a].registros.length; v2 = agrupado[b].registros.length; }
+      if (v1>v2) return ordemDetalhes.asc?1:-1;
+      if (v1<v2) return ordemDetalhes.asc?-1:1;
+      return 0;
+    });
+  }
+
+  chavesOrdenadas.forEach(chave => {
+    let partes = chave.split(" - V");
+    let item = partes[0], versao = partes[1], tamanho = "";
+    if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][item] && banco[tipoDetalheAtual][item][versao]) {
+      tamanho = banco[tipoDetalheAtual][item][versao].tamanho;
+    }
+    pesoTotalAcumulado += agrupado[chave].total;
+    totalBobinas += agrupado[chave].registros.length;
+    let idLimpo = "gp" + item.replace(/[^a-zA-Z0-9]/g, '') + versao.replace(/[^a-zA-Z0-9]/g, '');
+
+    let tr = document.createElement('tr');
+    tr.id = "principal-" + idLimpo;
+    tr.innerHTML = `
+      <td>${item}</td><td>${versao}</td><td>${tamanho}</td>
+      <td>${formatarPeso(agrupado[chave].total)}</td>
+      <td>${agrupado[chave].registros.filter(r => !r.consumida).length}</td>
+      <td><button class="btn-expandir-detalhe" onclick="toggleGrupo('${idLimpo}')">+</button></td>
+    `;
+    longPress(tr, function() { abrirModalOpcoes('item', chave, null); });
+    tbody.appendChild(tr);
+
+    if (agrupado[chave].registros.length > 0) {
+      let trLegenda = document.createElement('tr');
+      trLegenda.className = "detalhe-legenda hidden";
+      trLegenda.setAttribute('data-grupo', idLimpo);
+      trLegenda.innerHTML = `<td style="text-align:center;width:2ch;">#</td><td colspan="2" style="text-align:center;">📅</td><td style="text-align:center;">Kg</td><td colspan="2"></td>`;
+      tbody.appendChild(trLegenda);
+
+      agrupado[chave].registros.forEach((reg, idx) => {
+        let indexReal = historico.indexOf(reg);
+        let trReg = document.createElement('tr');
+        trReg.className = "detalhe-registro hidden" + (reg.consumida ? " bobina-consumida" : "");
+        trReg.setAttribute('data-grupo', idLimpo);
+        trReg.innerHTML = `
+          <td style="text-align:center;width:2ch;"><strong>${idx+1}</strong></td>
+          <td colspan="2" style="text-align:center;font-size:11px;">${reg.data}</td>
+          <td style="text-align:center;"><strong>${Math.round(reg.qtd)}</strong></td>
+          <td style="text-align:center;">
+            <button class="btn-qr" onclick="event.stopPropagation(); gerarQRBobina(${indexReal})" title="QR Code">QR</button>
+          </td>
+          <td></td>
+        `;
+        longPress(trReg, function() { abrirModalOpcoes('bobina', chave, indexReal); });
+        tbody.appendChild(trReg);
+      });
+    } else {
+      let trSem = document.createElement('tr');
+      trSem.className = "detalhe-registro hidden";
+      trSem.setAttribute('data-grupo', idLimpo);
+      trSem.innerHTML = `<td colspan="6" style="text-align:center;font-size:11px;color:#64748b;">Sem registro no histórico</td>`;
+      tbody.appendChild(trSem);
+    }
+  });
+
+  document.getElementById('detalheTotalPeso').textContent = formatarPeso(pesoTotalAcumulado) + ' kg';
+  document.getElementById('detalheTotalBobinas').textContent = totalBobinas + ' bobinas';
+}
+
+function toggleGrupo(id) {
+  let linhas = document.querySelectorAll(`tr[data-grupo="${id}"]`);
+  let principal = document.getElementById("principal-" + id);
+  let btn = event.target;
+  let abrindo = false;
+  linhas.forEach(l => {
+    if (l.classList.contains('hidden')) { l.classList.remove('hidden'); abrindo = true; }
+    else l.classList.add('hidden');
+  });
+  if (abrindo) { principal.classList.add('grupo-aberto'); btn.textContent = "−"; }
+  else { principal.classList.remove('grupo-aberto'); btn.textContent = "+"; }
+}
+
+/* ================= BACKUP ================= */
+
+function exportarBackup() {
+  const dados = { estoque, historico, banco, dataBackup: new Date().toLocaleString() };
+  const blob = new Blob([JSON.stringify(dados, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "backup_estoque_" + getTimestamp() + ".json";
+  link.click();
+}
+
+function importarBackup() { document.getElementById('inputBackup').click(); }
+
+function processarBackup(event) {
+  const arquivo = event.target.files[0];
+  if (!arquivo) return;
+  const leitor = new FileReader();
+  leitor.onload = function (e) {
+    try {
+      const dados = JSON.parse(e.target.result);
+      if (!dados.estoque || !dados.historico) {
+        mostrarToast('Arquivo de backup inválido!', 'erro');
+        return;
+      }
+      if (!confirm("Isso vai substituir TODOS os dados atuais pelo backup.\n\nData do backup: " + (dados.dataBackup || "desconhecida") + "\n\nDeseja continuar?")) return;
+      estoque = dados.estoque;
+      historico = dados.historico;
+      if (dados.banco) {
+        banco = dados.banco;
+        salvarBanco();
+      }
+      salvarDados();
+      atualizarTabela();
+      atualizarHistorico();
+      mostrarToast('Backup restaurado com sucesso!');
+      fecharModalConfig();
+    } catch (erro) {
+      mostrarToast('Erro ao ler o arquivo de backup!', 'erro');
+    }
+  };
+  leitor.readAsText(arquivo);
+  event.target.value = "";
+}
+
+/* ================= LONG PRESS + MODAL OPÇÕES ================= */
+
+let longPressTimer = null;
+let opcaoAtual = { tipo: null, chave: null, indexHistorico: null };
+
+function abrirModalOpcoes(tipo, chave, indexHistorico) {
+  opcaoAtual.tipo = tipo;
+  opcaoAtual.chave = chave;
+  opcaoAtual.indexHistorico = indexHistorico;
+
+  let titulo = document.getElementById('modalOpcoesTitulo');
+  let btnEditar = document.getElementById('btnOpcaoEditar');
+
+  if (tipo === 'item') {
+    titulo.textContent = chave;
+    btnEditar.style.display = 'none';
+  } else {
+    titulo.textContent = chave + ' — #' + (indexHistorico + 1);
+    btnEditar.style.display = 'block';
+  }
+
+  let btnConsumir = document.getElementById('btnOpcaoConsumir');
+  if (tipo === 'bobina' && historico[indexHistorico] && historico[indexHistorico].consumida) {
+    btnConsumir.textContent = '↩ Desmarcar consumida';
+  } else if (tipo === 'item') {
+    let todasConsumidas = historico.filter(h => h.item === chave && h.tipo === "Entrada").every(h => h.consumida);
+    btnConsumir.textContent = todasConsumidas ? '↩ Desmarcar consumidas' : '✔️ Marcar como consumida';
+  } else {
+    btnConsumir.textContent = '✔️ Marcar como consumida';
+  }
+
+  let btnExcluirConsumidas = document.getElementById('btnOpcaoExcluirConsumidas');
+  if (tipo === 'item') {
+    let temConsumida = historico.some(h => h.item === chave && h.tipo === "Entrada" && h.consumida);
+    btnExcluirConsumidas.style.display = temConsumida ? 'block' : 'none';
+  } else {
+    btnExcluirConsumidas.style.display = 'none';
+  }
+
+  document.getElementById('modalOpcoes').classList.remove('hidden');
+}
+
+function fecharModalOpcoes() {
+  document.getElementById('modalOpcoes').classList.add('hidden');
+  opcaoAtual = { tipo: null, chave: null, indexHistorico: null };
+}
+
+function longPress(elemento, callback) {
+  elemento.addEventListener('touchstart', function(e) {
+    longPressTimer = setTimeout(function() { callback(); }, 500);
+  });
+  elemento.addEventListener('touchend', function() { clearTimeout(longPressTimer); });
+  elemento.addEventListener('touchmove', function() { clearTimeout(longPressTimer); });
+  elemento.addEventListener('mousedown', function(e) {
+    longPressTimer = setTimeout(function() { callback(); }, 500);
+  });
+  elemento.addEventListener('mouseup', function() { clearTimeout(longPressTimer); });
+  elemento.addEventListener('mouseleave', function() { clearTimeout(longPressTimer); });
+}
+
+/* ================= AÇÕES DO MODAL ================= */
+
+function editarBobina() {
+  if (opcaoAtual.tipo !== 'bobina') return;
+  let reg = historico[opcaoAtual.indexHistorico];
+  if (!reg) return;
+  let novoPeso = prompt("Novo peso (kg):", reg.qtd);
+  if (novoPeso === null) return;
+  novoPeso = parseFloat(novoPeso);
+  if (isNaN(novoPeso) || novoPeso <= 0) { mostrarToast('Peso inválido', 'erro'); return; }
+  let diferenca = novoPeso - reg.qtd;
+  reg.qtd = novoPeso;
+  if (!reg.consumida && estoque[opcaoAtual.chave]) {
+    estoque[opcaoAtual.chave] += diferenca;
+    if (estoque[opcaoAtual.chave] <= 0) delete estoque[opcaoAtual.chave];
+  }
+  salvarDados();
+  atualizarTudo();
+  fecharModalOpcoes();
+  mostrarToast('Peso atualizado');
+}
+
+function consumirBobina() {
+  salvarEstadoParaDesfazer();
+  if (opcaoAtual.tipo === 'bobina') {
+    let reg = historico[opcaoAtual.indexHistorico];
+    if (!reg) return;
+    if (reg.consumida) {
+      reg.consumida = false;
+      if (estoque[opcaoAtual.chave]) estoque[opcaoAtual.chave] += reg.qtd;
+      else estoque[opcaoAtual.chave] = reg.qtd;
+      if (!estoque[opcaoAtual.chave + '_qtd']) estoque[opcaoAtual.chave + '_qtd'] = 0;
+      estoque[opcaoAtual.chave + '_qtd']++;
+      for (let i = historico.length - 1; i >= 0; i--) {
+        if (historico[i].tipo === 'Consumo' && historico[i].refEntradaId === reg.id) {
+          historico.splice(i, 1); break;
+        }
+      }
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Consumo desmarcado');
+    } else {
+      reg.consumida = true;
+      if (estoque[opcaoAtual.chave]) {
+        estoque[opcaoAtual.chave] -= reg.qtd;
+        if (estoque[opcaoAtual.chave] <= 0) { delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd']; }
+        else if (estoque[opcaoAtual.chave+'_qtd'] > 0) estoque[opcaoAtual.chave+'_qtd']--;
+      }
+      let regConsumo = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
+      historico.push(regConsumo);
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Bobina consumida');
+    }
+  } else if (opcaoAtual.tipo === 'item') {
+    let entradas = historico.filter(h => h.item === opcaoAtual.chave && h.tipo === "Entrada");
+    let todasConsumidas = entradas.every(h => h.consumida);
+    if (todasConsumidas) {
+      entradas.filter(h => h.consumida).forEach(h => {
+        h.consumida = false;
+        if (estoque[opcaoAtual.chave]) estoque[opcaoAtual.chave] += h.qtd;
+        else estoque[opcaoAtual.chave] = h.qtd;
+      });
+      for (let i = historico.length-1; i >= 0; i--) {
+        if (historico[i].tipo === 'Consumo' && historico[i].item === opcaoAtual.chave) historico.splice(i, 1);
+      }
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Consumo desmarcado');
+    } else {
+      entradas.forEach(h => {
+        if (!h.consumida) {
+          h.consumida = true;
+          if (estoque[opcaoAtual.chave]) { estoque[opcaoAtual.chave] -= h.qtd; if (estoque[opcaoAtual.chave] <= 0) delete estoque[opcaoAtual.chave]; }
+          let regConsumo = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
+          historico.push(regConsumo);
+        }
+      });
+      salvarDados(); atualizarTudo(); fecharModalOpcoes();
+      mostrarToast('Todas consumidas');
+    }
+  }
+}
+
+/* ================= EXCLUIR BOBINA ================= */
+
+window.excluirBobina = function() {
+  salvarEstadoParaDesfazer();
+  if (opcaoAtual.tipo === 'bobina') {
+    if (!confirm("Remover esta bobina?")) return;
+    let reg = historico[opcaoAtual.indexHistorico];
+    if (!reg) return;
+    if (!reg.consumida && estoque[opcaoAtual.chave]) {
+      estoque[opcaoAtual.chave] -= reg.qtd;
+      if (estoque[opcaoAtual.chave+'_qtd'] > 0) estoque[opcaoAtual.chave+'_qtd']--;
+      if (estoque[opcaoAtual.chave] <= 0) { delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd']; }
+    }
+    reg._removidaEstoque = true;
+    let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
+    historico.push(regExclusao);
+    salvarDados(); atualizarTudo(); fecharModalOpcoes();
+    mostrarToast('Bobina excluída');
+  } else if (opcaoAtual.tipo === 'item') {
+    if (!confirm("Remover TODAS as bobinas de " + opcaoAtual.chave + "?")) return;
+    historico.filter(h => h.item===opcaoAtual.chave && h.tipo==="Entrada" && !h.consumida && !h._removidaEstoque).forEach(h => {
+      h._removidaEstoque = true;
+      let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
+      historico.push(regExclusao);
+    });
+    delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd'];
+    salvarDados(); atualizarTudo(); fecharModalOpcoes();
+    mostrarToast('Bobinas excluídas');
+  }
+}
+
+/* ================= EXCLUIR CONSUMIDAS ================= */
+
+window.excluirConsumidas = function() {
+  salvarEstadoParaDesfazer();
+  if (!confirm("Remover todas as bobinas consumidas de " + opcaoAtual.chave + "?")) return;
+  historico.forEach(h => {
+    if (h.item===opcaoAtual.chave && h.tipo==="Entrada" && h.consumida && !h._removidaEstoque) {
+      h._removidaEstoque = true;
+      let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
+      historico.push(regExclusao);
+    }
+  });
+  salvarDados(); atualizarTudo(); fecharModalOpcoes();
+  mostrarToast('Consumidas excluídas');
+}
+
+/* ================= ATUALIZAR TUDO ================= */
+
+function atualizarTudo() {
+  atualizarTabela();
+  atualizarHistorico();
+  if (tipoDetalheAtual) {
+    let gruposAbertos = [];
+    document.querySelectorAll('tr.grupo-aberto').forEach(tr => { gruposAbertos.push(tr.id.replace('principal-', '')); });
+    atualizarDetalhes();
+    gruposAbertos.forEach(id => {
+      let linhas = document.querySelectorAll(`tr[data-grupo="${id}"]`);
+      let principal = document.getElementById("principal-" + id);
+      if (principal) { principal.classList.add('grupo-aberto'); let btn = principal.querySelector('.btn-expandir-detalhe'); if (btn) btn.textContent = "−"; }
+      linhas.forEach(l => l.classList.remove('hidden'));
+    });
+  }
+}
+
+/* ================= SAÍDA COM SELEÇÃO DE BOBINAS ================= */
+
+let saidaAtual = { identificador: null, pesoTotal: 0, pesoRestante: 0, bobinas: [], descontos: {}, zeradas: [] };
+let bobinaZeradaAtual = null;
+
+function abrirModalSaida(identificador, pesoSaida) {
+  saidaAtual.identificador = identificador;
+  saidaAtual.pesoTotal = pesoSaida;
+  saidaAtual.pesoRestante = pesoSaida;
+  saidaAtual.descontos = {};
+  saidaAtual.zeradas = [];
+
+  let entradas = historico.filter(h => h.item === identificador && h.tipo === "Entrada" && !h.consumida);
+  let pesoAtual = estoque[identificador] || 0;
+  let bobinas = [], soma = 0;
+  for (let i = entradas.length - 1; i >= 0; i--) {
+    if (soma >= pesoAtual) break;
+    bobinas.unshift(entradas[i]);
+    soma += entradas[i].qtd;
+  }
+  saidaAtual.bobinas = bobinas;
+  document.getElementById('modalSaidaTitulo').textContent = 'Saída — ' + identificador;
+  renderizarBobinasSaida();
+  document.getElementById('modalSaida').classList.remove('hidden');
+}
+
+function renderizarBobinasSaida() {
+  let tbody = document.getElementById('modalSaidaBody');
+  tbody.innerHTML = '';
+  let html = '';
+  saidaAtual.bobinas.forEach((bob, idx) => {
+    let indexReal = historico.indexOf(bob);
+    let desconto = saidaAtual.descontos[indexReal] || 0;
+    let pesoAtualBob = bob.qtd - desconto;
+    let jaSelecionada = desconto > 0;
+    let zerada = saidaAtual.zeradas.includes(indexReal);
+    let classe = zerada ? 'bobina-descontada' : (jaSelecionada ? 'bobina-selecionada' : '');
+    let checado = jaSelecionada ? 'checked' : '';
+    let desabilitado = (saidaAtual.pesoRestante <= 0 && !jaSelecionada) ? 'disabled' : '';
+    html += `
+      <tr class="${classe}">
+        <td><input type="radio" ${checado} ${desabilitado} onclick="selecionarBobinaSaida(${indexReal})" style="width:16px;height:16px;margin:0;cursor:pointer;"></td>
+        <td><strong>${idx+1}</strong></td>
+        <td style="font-size:11px;">${bob.data}</td>
+        <td><strong>${Math.round(pesoAtualBob)}</strong></td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = html;
+  document.getElementById('modalSaidaRestante').textContent = 'Restante: ' + Math.round(saidaAtual.pesoRestante) + ' kg';
+}
+
+function selecionarBobinaSaida(indexReal) {
+  let bob = historico[indexReal];
+  if (!bob) return;
+  if (saidaAtual.descontos[indexReal]) {
+    saidaAtual.pesoRestante += saidaAtual.descontos[indexReal];
+    delete saidaAtual.descontos[indexReal];
+    let pos = saidaAtual.zeradas.indexOf(indexReal);
+    if (pos !== -1) saidaAtual.zeradas.splice(pos, 1);
+    renderizarBobinasSaida();
+    return;
+  }
+  let pesoAtualBob = bob.qtd;
+  if (saidaAtual.pesoRestante <= 0) return;
+  if (saidaAtual.pesoRestante >= pesoAtualBob) {
+    saidaAtual.descontos[indexReal] = pesoAtualBob;
+    saidaAtual.pesoRestante -= pesoAtualBob;
+    saidaAtual.zeradas.push(indexReal);
+  } else {
+    saidaAtual.descontos[indexReal] = saidaAtual.pesoRestante;
+    saidaAtual.pesoRestante = 0;
+  }
+  renderizarBobinasSaida();
+}
+
+function confirmarSaida() {
+  let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a+b, 0);
+  if (totalDescontado <= 0) { mostrarToast('Selecione pelo menos uma bobina', 'erro'); return; }
+  if (saidaAtual.pesoRestante > 0) { mostrarToast('Ainda restam ' + Math.round(saidaAtual.pesoRestante) + ' kg para descontar', 'erro'); return; }
+  if (saidaAtual.zeradas.length > 0) processarZeradas(0);
+  else finalizarSaida();
+}
+
+function processarZeradas(indice) {
+  if (indice >= saidaAtual.zeradas.length) { finalizarSaida(); return; }
+  bobinaZeradaAtual = { indexReal: saidaAtual.zeradas[indice], indiceZerada: indice };
+  let bob = historico[bobinaZeradaAtual.indexReal];
+  document.getElementById('modalZerouTexto').textContent = 'Bobina #' + (saidaAtual.bobinas.indexOf(bob)+1) + ' — ' + Math.round(bob.qtd) + ' kg';
+  document.getElementById('modalZerou').classList.remove('hidden');
+}
+
+function zerouConsumir() {
+  historico[bobinaZeradaAtual.indexReal]._consumir = true;
+  document.getElementById('modalZerou').classList.add('hidden');
+  processarZeradas(bobinaZeradaAtual.indiceZerada + 1);
+}
+
+function zerouExcluir() {
+  historico[bobinaZeradaAtual.indexReal]._excluir = true;
+  document.getElementById('modalZerou').classList.add('hidden');
+  processarZeradas(bobinaZeradaAtual.indiceZerada + 1);
+}
+
+function finalizarSaida() {
+  salvarEstadoParaDesfazer();
+  let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a+b, 0);
+  let bobsConsumidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._consumir);
+  let bobsExcluidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._excluir);
+  let pesoDescontadoParcial = 0;
+  Object.keys(saidaAtual.descontos).forEach(idx => {
+    let indexReal = parseInt(idx);
+    if (!saidaAtual.zeradas.includes(indexReal)) pesoDescontadoParcial += saidaAtual.descontos[indexReal];
+  });
+
+  let partesMsg = saidaAtual.identificador.split(" - V");
+  let itemNome = partesMsg[0], versaoNome = partesMsg[1];
+  let mensagemFinal = "";
+  bobsConsumidas.forEach(idx => { let bob = historico[idx]; if (bob) mensagemFinal += "Bobina consumida (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n"; });
+  bobsExcluidas.forEach(idx => { let bob = historico[idx]; if (bob) mensagemFinal += "Bobina excluída (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n"; });
+  if (pesoDescontadoParcial > 0) mensagemFinal += "Removido " + Math.round(pesoDescontadoParcial) + "kg (" + itemNome + ", V" + versaoNome + ")";
+
+  if (estoque[saidaAtual.identificador]) {
+    estoque[saidaAtual.identificador] -= totalDescontado;
+    let qtdKey = saidaAtual.identificador + '_qtd';
+    if (saidaAtual.zeradas.length > 0 && estoque[qtdKey]) {
+      estoque[qtdKey] -= saidaAtual.zeradas.length;
+      if (estoque[qtdKey] < 0) estoque[qtdKey] = 0;
+    }
+    if (estoque[saidaAtual.identificador] <= 0) { delete estoque[saidaAtual.identificador]; delete estoque[qtdKey]; }
+  }
+
+  Object.keys(saidaAtual.descontos).forEach(idx => {
+    let indexReal = parseInt(idx);
+    if (!saidaAtual.zeradas.includes(indexReal)) historico[indexReal].qtd -= saidaAtual.descontos[indexReal];
+  });
+
+  bobsConsumidas.forEach(idx => {
+    let bob = historico[idx];
+    if (bob) {
+      bob.consumida = true;
+      historico.push({ id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
+      delete bob._consumir;
+    }
+  });
+
+  if (pesoDescontadoParcial > 0) {
+    let pesoOriginalParcial = 0, refEntradaId = null, refEntradaData = null;
+    Object.keys(saidaAtual.descontos).forEach(idx => {
+      let indexReal = parseInt(idx);
+      if (!saidaAtual.zeradas.includes(indexReal)) {
+        pesoOriginalParcial = historico[indexReal].qtd + saidaAtual.descontos[indexReal];
+        refEntradaId = historico[indexReal].id || null;
+        refEntradaData = historico[indexReal].data || null;
+      }
+    });
+    historico.push({ id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo parcial', item: saidaAtual.identificador, qtd: pesoDescontadoParcial, qtdOriginal: pesoOriginalParcial, refEntradaId, refEntradaData });
+  }
+
+  bobsExcluidas.forEach(idx => {
+    let bob = historico[idx];
+    if (bob) {
+      bob._removidaEstoque = true;
+      historico.push({ id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
+      delete bob._excluir;
+    }
+  });
+
+  for (let i = historico.length-1; i >= 0; i--) {
+    if (historico[i]._excluir) historico.splice(i, 1);
+    if (historico[i] && historico[i]._consumir) delete historico[i]._consumir;
+  }
+
+  salvarDados(); atualizarTabela(); atualizarHistorico();
+  document.getElementById('modalSaida').classList.add('hidden');
+  tipoSelect.value = '';
+  itemSelect.innerHTML = '<option value="">Selecionar item</option>';
+  versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
+  quantidade.value = '';
+  document.getElementById('buscaItem').value = '';
+  if(saldoAtual) saldoAtual.innerHTML = "";
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  mostrarToast('Saída aplicada');
+
+  setTimeout(function() {
+    if (mensagemFinal) alert(mensagemFinal);
+  }, 150);
+}
+
+function cancelarSaida() {
+  saidaAtual = { identificador: null, pesoTotal: 0, pesoRestante: 0, bobinas: [], descontos: {}, zeradas: [] };
+  document.getElementById('modalSaida').classList.add('hidden');
+}
+
+/* ================= LONG PRESS LIMPAR TUDO ================= */
+
+function configurarLongPress(botao, callback, tempo = 3000) {
+  if (!botao) return;
+  let timer = null;
+  const iniciar = () => { timer = setTimeout(callback, tempo); };
+  const cancelar = () => { clearTimeout(timer); timer = null; };
+  botao.addEventListener('touchstart', iniciar);
+  botao.addEventListener('touchend', cancelar);
+  botao.addEventListener('touchmove', cancelar);
+  botao.addEventListener('mousedown', iniciar);
+  botao.addEventListener('mouseup', cancelar);
+  botao.addEventListener('mouseleave', cancelar);
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+
+  let btnEstoque = document.getElementById('btnLimparEstoque');
+  configurarLongPress(btnEstoque, function() {
+    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o estoque?\n\nAs exclusões serão registradas no histórico.")) return;
+    salvarEstadoParaDesfazer();
+    let alterou = excluirTodoEstoqueComHistorico();
+    salvarDados();
+    atualizarTabela();
+    atualizarHistorico();
+    if (tipoDetalheAtual) atualizarDetalhes();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    if (alterou) mostrarToast('Estoque excluído');
+    else mostrarToast('Nenhum item no estoque', 'erro');
+  });
+
+  let btnHistorico = document.getElementById('btnLimparHistorico');
+  configurarLongPress(btnHistorico, function() {
+    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja limpar o histórico?\n\nRegistros de bobinas que ainda estão no estoque serão mantidos.")) return;
+    historico = historico.filter(h => h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque && estoque[h.item] > 0);
+    salvarDados(); atualizarHistorico();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    mostrarToast('Histórico limpo');
+  });
+
+  let btnDetalhes = document.getElementById('btnLimparDetalhes');
+  configurarLongPress(btnDetalhes, function() {
+    if (!tipoDetalheAtual) return;
+    let nomeTipo = nomeCompletoTipo(tipoDetalheAtual);
+    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir todo o estoque de " + nomeTipo + "?\n\nAs exclusões serão registradas no histórico.")) return;
+    salvarEstadoParaDesfazer();
+    let alterou = excluirEstoquePorTipoComHistorico(tipoDetalheAtual);
+    salvarDados();
+    atualizarTabela();
+    atualizarHistorico();
+    atualizarDetalhes();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    if (alterou) mostrarToast(nomeTipo + ' excluído');
+    else mostrarToast('Nenhum item de ' + nomeTipo, 'erro');
+  });
+
+  let btnLimparFiltro = document.getElementById("btnLimparFiltro");
+  if(btnLimparFiltro){
+    btnLimparFiltro.addEventListener("click", function(){
+      document.getElementById("dataInicio").value = "";
+      document.getElementById("dataFim").value = "";
+      document.getElementById("buscaHistorico").value = "";
+      atualizarHistorico();
+    });
+  }
+});
+
+/* ================= REMOVER HISTÓRICO ================= */
+
+window.removerHistorico = function(i){
+  let registro = historico[i];
+  if (!registro) return;
+  if (registro.tipo === "Entrada" && !registro.consumida && !registro._removidaEstoque && estoque[registro.item] && estoque[registro.item] > 0) {
+    mostrarToast('Não é possível excluir uma entrada ativa no estoque', 'erro');
+    return;
+  }
+  if(!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
+  salvarEstadoParaDesfazer();
+  historico.splice(i, 1);
+  salvarDados();
+  atualizarHistorico();
+  mostrarToast('Registro removido');
+};
+
+/* ================= MENU CONFIGURAÇÕES ================= */
+
+window.abrirModalConfig = function() {
+  voltarConfigPrincipal();
+  document.getElementById('modalConfig').classList.remove('hidden');
+};
+
+window.fecharModalConfig = function() {
+  document.getElementById('modalConfig').classList.add('hidden');
+};
+
+window.voltarConfigPrincipal = function() {
+  document.getElementById('configTitulo').textContent = 'Configurações';
+  document.getElementById('configMenuPrincipal').classList.remove('hidden');
+  document.getElementById('configTelaExportar').classList.add('hidden');
+  document.getElementById('configTelaBackup').classList.add('hidden');
+  document.getElementById('configTelaCadastro').classList.add('hidden');
+};
+
+window.abrirConfigExportar = function() {
+  document.getElementById('configTitulo').textContent = 'Exportar dados';
+  document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaExportar').classList.remove('hidden');
+};
+
+window.abrirConfigBackup = function() {
+  document.getElementById('configTitulo').textContent = 'Backup / Restaurar';
+  document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaBackup').classList.remove('hidden');
+};
+
+window.alternarModoEscuro = function() {
+  document.body.classList.toggle('dark-mode');
+  localStorage.setItem('modoEscuro', document.body.classList.contains('dark-mode'));
+};
+
+/* ================= SISTEMA DE DESFAZER / REFAZER ================= */
+
+let pilhaDesfazer = [];
+let pilhaRefazer = [];
+const MAX_DESFAZER = 10;
+
+function salvarEstadoParaDesfazer() {
+  let snapshot = {
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  };
+  pilhaDesfazer.push(snapshot);
+  if (pilhaDesfazer.length > MAX_DESFAZER) pilhaDesfazer.shift();
+  pilhaRefazer = [];
+  atualizarBotoesDesfazerRefazer();
+}
+
+window.desfazerAcao = function() {
+  if (pilhaDesfazer.length === 0) return;
+  pilhaRefazer.push({
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  });
+  if (pilhaRefazer.length > MAX_DESFAZER) pilhaRefazer.shift();
+  let snapshot = pilhaDesfazer.pop();
+  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
+  historico = JSON.parse(JSON.stringify(snapshot.historico));
+  salvarDados();
+  atualizarTudo();
+  atualizarBotoesDesfazerRefazer();
+  if (navigator.vibrate) navigator.vibrate([50]);
+};
+
+window.refazerAcao = function() {
+  if (pilhaRefazer.length === 0) return;
+  pilhaDesfazer.push({
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  });
+  if (pilhaDesfazer.length > MAX_DESFAZER) pilhaDesfazer.shift();
+  let snapshot = pilhaRefazer.pop();
+  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
+  historico = JSON.parse(JSON.stringify(snapshot.historico));
+  salvarDados();
+  atualizarTudo();
+  atualizarBotoesDesfazerRefazer();
+  if (navigator.vibrate) navigator.vibrate([50]);
+};
+
+function atualizarBotoesDesfazerRefazer() {
+  let btnUndo = document.getElementById('btnDesfazer');
+  let btnRedo = document.getElementById('btnRefazer');
+  if (btnUndo) {
+    if (pilhaDesfazer.length > 0) { btnUndo.classList.add('ativo'); btnUndo.title = 'Desfazer (' + pilhaDesfazer.length + ')'; }
+    else { btnUndo.classList.remove('ativo'); btnUndo.title = 'Nada para desfazer'; }
+  }
+  if (btnRedo) {
+    if (pilhaRefazer.length > 0) { btnRedo.classList.add('ativo'); btnRedo.title = 'Refazer (' + pilhaRefazer.length + ')'; }
+    else { btnRedo.classList.remove('ativo'); btnRedo.title = 'Nada para refazer'; }
+  }
+}
+
+/* ================= GERENCIAR CADASTRO ================= */
+
+window.abrirConfigCadastro = function() {
+  document.getElementById('configTitulo').textContent = 'Gerenciar cadastro';
+  document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaCadastro').classList.remove('hidden');
+  renderizarCadastro();
+};
+
+function renderizarCadastro() {
+  let container = document.getElementById('cadastroAcordeao');
+  let tiposAbertos = [];
+  let itensAbertos = [];
+  container.querySelectorAll('.cad-tipo.aberto').forEach(el => { tiposAbertos.push(el.dataset.tipo); });
+  container.querySelectorAll('.cad-item.aberto').forEach(el => { itensAbertos.push(el.dataset.tipo + '|' + el.dataset.item); });
+  container.innerHTML = '';
+
+  let tipos = [
+    { chave: 'brf', nome: 'BRF' },
+    { chave: 'tampas', nome: 'Tampas' },
+    { chave: 'laminacao', nome: '1ª Laminação' }
+  ];
+
+  tipos.forEach(tipo => {
+    if (!banco[tipo.chave]) banco[tipo.chave] = {};
+    let itens = Object.keys(banco[tipo.chave]).sort();
+    let totalVersoes = itens.reduce((acc, item) => acc + Object.keys(banco[tipo.chave][item]).length, 0);
+
+    let divTipo = document.createElement('div');
+    divTipo.className = 'cad-tipo';
+    divTipo.dataset.tipo = tipo.chave;
+    if (tiposAbertos.includes(tipo.chave)) divTipo.classList.add('aberto');
+
+    let header = document.createElement('button');
+    header.className = 'cad-tipo-header';
+    header.innerHTML = `
+      <span>${tipo.nome} <span style="font-weight:400; font-size:12px; opacity:0.7;">(${itens.length} itens, ${totalVersoes} versões)</span></span>
+      <span class="cad-seta">▶</span>
+    `;
+    header.onclick = function() { divTipo.classList.toggle('aberto'); };
+
+    let body = document.createElement('div');
+    body.className = 'cad-tipo-body';
+
+    itens.forEach(itemNome => {
+      let versoes = Object.keys(banco[tipo.chave][itemNome]).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
+      let divItem = document.createElement('div');
+      divItem.className = 'cad-item';
+      divItem.dataset.tipo = tipo.chave;
+      divItem.dataset.item = itemNome;
+      if (itensAbertos.includes(tipo.chave + '|' + itemNome)) divItem.classList.add('aberto');
+
+      let itemHeader = document.createElement('button');
+      itemHeader.className = 'cad-item-header';
+      itemHeader.innerHTML = `
+        <span class="cad-seta">▶</span>
+        <span class="cad-item-nome">${itemNome}</span>
+        <span class="cad-item-qtd">${versoes.length}v</span>
+        <span class="cad-btn-mini" title="Renomear" onclick="event.stopPropagation(); editarNomeItem('${tipo.chave}', '${itemNome}')">✏️</span>
+        <span class="cad-btn-mini excluir" title="Excluir item" onclick="event.stopPropagation(); removerItem('${tipo.chave}', '${itemNome}')">🗑️</span>
+      `;
+      itemHeader.onclick = function(e) {
+        if (e.target.classList.contains('cad-btn-mini')) return;
+        divItem.classList.toggle('aberto');
+      };
+
+      let itemBody = document.createElement('div');
+      itemBody.className = 'cad-item-body';
+
+      versoes.forEach(v => {
+        let tamanho = banco[tipo.chave][itemNome][v].tamanho || '';
+        let divVersao = document.createElement('div');
+        divVersao.className = 'cad-versao';
+        divVersao.innerHTML = `
+          <div class="cad-versao-info">
+            <span class="cad-versao-nome">V${v}</span>
+            <span class="cad-versao-tamanho">${tamanho}</span>
+          </div>
+          <div class="cad-versao-acoes">
+            <button class="cad-btn-mini" onclick="editarVersao('${tipo.chave}', '${itemNome}', '${v}')" title="Editar">✏️</button>
+            <button class="cad-btn-mini excluir" onclick="removerVersao('${tipo.chave}', '${itemNome}', '${v}')" title="Excluir">🗑️</button>
+          </div>
+        `;
+        itemBody.appendChild(divVersao);
+      });
+
+      let btnAddVersao = document.createElement('button');
+      btnAddVersao.className = 'cad-btn-add';
+      btnAddVersao.textContent = '+ Adicionar versão';
+      btnAddVersao.onclick = function() { adicionarVersao(tipo.chave, itemNome); };
+      itemBody.appendChild(btnAddVersao);
+
+      divItem.appendChild(itemHeader);
+      divItem.appendChild(itemBody);
+      body.appendChild(divItem);
+    });
+
+    let btnAddItem = document.createElement('button');
+    btnAddItem.className = 'cad-btn-add';
+    btnAddItem.textContent = '+ Adicionar item';
+    btnAddItem.onclick = function() { adicionarItem(tipo.chave); };
+    body.appendChild(btnAddItem);
+
+    divTipo.appendChild(header);
+    divTipo.appendChild(body);
+    container.appendChild(divTipo);
+  });
+}
+
+window.adicionarItem = function(tipo) {
+  let nome = prompt("Nome do novo item:");
+  if (!nome || !nome.trim()) return;
+  nome = nome.trim();
+  if (banco[tipo][nome]) { mostrarToast('Este item já existe!', 'erro'); return; }
+  banco[tipo][nome] = {};
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Item adicionado');
+};
+
+window.editarNomeItem = function(tipo, itemAntigo) {
+  let novoNome = prompt("Novo nome para o item:", itemAntigo);
+  if (!novoNome || !novoNome.trim() || novoNome.trim() === itemAntigo) return;
+  novoNome = novoNome.trim();
+  if (banco[tipo][novoNome]) { mostrarToast('Já existe um item com este nome!', 'erro'); return; }
+  let temEstoque = Object.keys(estoque).some(chave => chave.startsWith(itemAntigo + " - V"));
+  if (temEstoque) {
+    if (!confirm("Este item possui entradas no estoque.\n\nAs chaves serão atualizadas.\n\nDeseja continuar?")) return;
+    Object.keys(estoque).forEach(chave => {
+      if (chave.startsWith(itemAntigo + " - V")) {
+        let novaChave = chave.replace(itemAntigo, novoNome);
+        estoque[novaChave] = estoque[chave];
+        delete estoque[chave];
+        if (estoque[chave + '_qtd'] !== undefined) {
+          estoque[novaChave + '_qtd'] = estoque[chave + '_qtd'];
+          delete estoque[chave + '_qtd'];
+        }
+      }
+    });
+    historico.forEach(h => {
+      if (h.item && h.item.startsWith(itemAntigo + " - V")) h.item = h.item.replace(itemAntigo, novoNome);
+    });
+    salvarDados();
+  }
+  banco[tipo][novoNome] = banco[tipo][itemAntigo];
+  delete banco[tipo][itemAntigo];
+  salvarBanco();
+  renderizarCadastro();
+  atualizarTudo();
+  mostrarToast('Item renomeado');
+};
+
+window.removerItem = function(tipo, item) {
+  let versoes = Object.keys(banco[tipo][item]).length;
+  if (!confirm("Excluir " + item + " e suas " + versoes + " versão(ões)?")) return;
+  delete banco[tipo][item];
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Item excluído');
+};
+
+window.adicionarVersao = function(tipo, item) {
+  let versao = prompt("Número da versão:");
+  if (!versao || !versao.trim()) return;
+  versao = versao.trim();
+  if (banco[tipo][item][versao]) { mostrarToast('Esta versão já existe!', 'erro'); return; }
+  let tamanho = prompt("Medidas (ex: 66 x 60):");
+  if (!tamanho || !tamanho.trim()) return;
+  tamanho = tamanho.trim();
+  banco[tipo][item][versao] = { tamanho: tamanho };
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Versão adicionada');
+};
+
+window.editarVersao = function(tipo, item, versao) {
+  let dados = banco[tipo][item][versao];
+  let novaVersao = prompt("Número da versão:", versao);
+  if (!novaVersao || !novaVersao.trim()) return;
+  novaVersao = novaVersao.trim();
+  let novoTamanho = prompt("Medidas:", dados.tamanho || '');
+  if (!novoTamanho || !novoTamanho.trim()) return;
+  novoTamanho = novoTamanho.trim();
+  if (novaVersao !== versao) {
+    if (banco[tipo][item][novaVersao]) { mostrarToast('Já existe uma versão com este número!', 'erro'); return; }
+    let chaveAntiga = item + " - V" + versao;
+    let chaveNova = item + " - V" + novaVersao;
+    let temEstoque = estoque[chaveAntiga] !== undefined;
+    if (temEstoque) {
+      if (!confirm("Esta versão possui entradas no estoque.\n\nAs chaves serão atualizadas.\n\nDeseja continuar?")) return;
+      estoque[chaveNova] = estoque[chaveAntiga];
+      delete estoque[chaveAntiga];
+      if (estoque[chaveAntiga + '_qtd'] !== undefined) {
+        estoque[chaveNova + '_qtd'] = estoque[chaveAntiga + '_qtd'];
+        delete estoque[chaveAntiga + '_qtd'];
+      }
+      historico.forEach(h => { if (h.item === chaveAntiga) h.item = chaveNova; });
+      salvarDados();
+    }
+    delete banco[tipo][item][versao];
+  }
+  banco[tipo][item][novaVersao] = { tamanho: novoTamanho };
+  salvarBanco();
+  renderizarCadastro();
+  atualizarTudo();
+  mostrarToast('Versão atualizada');
+};
+
+window.removerVersao = function(tipo, item, versao) {
+  if (!confirm("Excluir a versão V" + versao + "?")) return;
+  delete banco[tipo][item][versao];
+  if (Object.keys(banco[tipo][item]).length === 0) {
+    delete banco[tipo][item];
+    salvarBanco();
+    renderizarCadastro();
+    mostrarToast('Versão e item excluídos');
+    return;
+  }
+  salvarBanco();
+  renderizarCadastro();
+  mostrarToast('Versão excluída');
+};
+
+function criarSnapshotEstado() {
+  return {
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico))
+  };
+}
+
+function restaurarSnapshotEstado(snapshot) {
+  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
+  historico = JSON.parse(JSON.stringify(snapshot.historico));
+  salvarDados();
+  atualizarTabela();
+  atualizarHistorico();
+  if (tipoDetalheAtual) atualizarDetalhes();
+}
+
+function gerarQRBobina(index) {
+  let reg = historico[index];
+  if (!reg || reg.tipo !== "Entrada") return;
+
+  let partes = reg.item.split(" - V");
+  let item = partes[0];
+  let versao = partes[1];
+  let tipo = "";
+
+  Object.keys(banco).forEach(t => {
+    if (banco[t] && banco[t][item]) tipo = t;
+  });
+
+  let tamanho = "";
+  if (tipo && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
+    tamanho = banco[tipo][item][versao].tamanho;
+  }
+
+  // Monta data no formato ddmmaaaa/hhmmss
+  let dataQR = "";
+  let dataProducao = "";
+  if (reg.data) {
+    let partesData = reg.data.split(", ");
+    if (partesData.length === 2) {
+      let dma = partesData[0].split("/");
+      let hms = partesData[1].replace(/:/g, "");
+      if (dma.length === 3 && hms.length === 6) {
+        dataQR = dma[0] + dma[1] + dma[2] + "/" + hms;
+        dataProducao = dma[0] + "/" + dma[1] + "/" + dma[2] + " às " + partesData[1];
+      }
+    }
+  }
+
+  // Formato simplificado: item/versao/peso/ddmmaaaa/hhmmss
+  let conteudoQR = item + "/" + versao + "/" + Math.round(reg.qtd);
+  if (dataQR) conteudoQR += "/" + dataQR;
+
+  // Limpa container
+  document.getElementById("qrContainer").innerHTML = "";
+
+  // Gera QR
+  new QRCode(document.getElementById("qrContainer"), {
+    text: conteudoQR,
+    width: 200,
+    height: 200,
+    colorDark: "#1e293b",
+    colorLight: "#ffffff",
+    correctLevel: QRCode.CorrectLevel.M
+  });
+
+  // Info abaixo do QR
+  let infoDiv = document.createElement("div");
+  infoDiv.className = "qr-info";
+  infoDiv.innerHTML = `
+    <div><strong>${item}</strong> — V${versao}</div>
+    <div>${tamanho}</div>
+    <div>${Math.round(reg.qtd)} kg</div>
+    <div style="font-size:11px; color:#94a3b8;">Produção: ${dataProducao || '-'}</div>
+    <div style="font-size:10px; color:#cbd5e1; margin-top:2px;">${conteudoQR}</div>
+  `;
+  document.getElementById("qrContainer").appendChild(infoDiv);
+
+  document.getElementById("modalQR").classList.remove("hidden");
+}
+
+let historicoSelecionadoIndex = null;
+
+function abrirAcoesHistorico(index) {
+  let reg = historico[index];
+  if (!reg) return;
+
+  historicoSelecionadoIndex = index;
+
+  let titulo = document.getElementById("modalHistoricoTitulo");
+  let btnQR = document.getElementById("btnHistoricoQR");
+
+  titulo.textContent = reg.item || "Ações do registro";
+
+  // QR só aparece para entrada
+  btnQR.style.display = (reg.tipo === "Entrada") ? "block" : "none";
+
+  document.getElementById("modalHistoricoAcoes").classList.remove("hidden");
+}
+
+function fecharModalHistoricoAcoes() {
+  document.getElementById("modalHistoricoAcoes").classList.add("hidden");
+  historicoSelecionadoIndex = null;
+}
+
+function abrirQRDoHistorico() {
+  if (historicoSelecionadoIndex === null) return;
+  let idx = historicoSelecionadoIndex;
+  fecharModalHistoricoAcoes();
+  gerarQRBobina(idx);
+}
+
+function confirmarRemoverHistoricoSelecionado() {
+  if (historicoSelecionadoIndex === null) return;
+  let idx = historicoSelecionadoIndex;
+  fecharModalHistoricoAcoes();
+  removerHistorico(idx);
+}
+
+let leitorQR = null;
+let leitorQRAberto = false;
+let scannerProcessando = false;
+let qrLidoAtual = null;
+
+async function fecharTodosScanners() {
+  try {
+    if (leitorQR && leitorQRAberto) {
+      await leitorQR.stop();
+      await leitorQR.clear();
+      leitorQR = null;
+      leitorQRAberto = false;
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner single:", e);
+  }
+  try {
+    if (leitorContinuo && leitorContinuoAberto) {
+      await leitorContinuo.stop();
+      await leitorContinuo.clear();
+      leitorContinuo = null;
+      leitorContinuoAberto = false;
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner contínuo:", e);
+  }
+}
+
+async function abrirScannerQR() {
+  try {
+    await fecharTodosScanners();
+
+    document.getElementById("modalScannerQR").classList.remove("hidden");
+    document.getElementById("scannerStatus").textContent = "Aponte a câmera para o QR da bobina";
+    document.getElementById("reader").innerHTML = "";
+
+    leitorQR = new Html5Qrcode("reader");
+
+    await leitorQR.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: { width: 220, height: 220 }
+      },
+      async (decodedText) => {
+        if (scannerProcessando) return;
+        scannerProcessando = true;
+        await processarLeituraQR(decodedText);
+      },
+      () => {}
+    );
+
+    leitorQRAberto = true;
+  } catch (erro) {
+    console.error("Erro ao abrir scanner QR:", erro);
+    mostrarToast("Não foi possível abrir a câmera", "erro");
+    await fecharScannerQR();
+  }
+}
+
+async function fecharScannerQR() {
+  try {
+    if (leitorQR && leitorQRAberto) {
+      await leitorQR.stop();
+      await leitorQR.clear();
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner:", e);
+  }
+
+  leitorQR = null;
+  leitorQRAberto = false;
+  scannerProcessando = false;
+
+  const modal = document.getElementById("modalScannerQR");
+  if (modal) modal.classList.add("hidden");
+
+  const reader = document.getElementById("reader");
+  if (reader) reader.innerHTML = "";
+}
+
+async function processarLeituraQR(textoLido) {
+  let dados = null;
+
+  // Tenta JSON primeiro (formato antigo)
+  try {
+    dados = JSON.parse(textoLido);
+  } catch (e) {
+    // Não é JSON, tenta formato simplificado
+    dados = interpretarQRSimplificado(textoLido);
+  }
+
+  if (!dados) {
+    await fecharScannerQR();
+    mostrarToast("QR inválido ou fora do padrão", "erro");
+    return;
+  }
+
+  let registroEncontrado = localizarRegistroPorQR(dados);
+
+  await fecharScannerQR();
+
+  mostrarResultadoQR(dados, registroEncontrado);
+  scannerProcessando = false;
+}
+
+function localizarRegistroPorQR(dados) {
+  // Monta o QR simplificado a partir dos dados lidos
+  let qrLido = dados.item + "/" + dados.versao + "/" + Math.round(parseFloat(dados.peso));
+  if (dados.data) {
+    let partesData = dados.data.split(", ");
+    if (partesData.length === 2) {
+      let dma = partesData[0].split("/");
+      let hms = partesData[1].replace(/:/g, "");
+      if (dma.length === 3 && hms.length === 6) {
+        qrLido += "/" + dma[0] + dma[1] + dma[2] + "/" + hms;
+      }
+    }
+  }
+
+  return historico.find(h => {
+    if (!h || h.tipo !== "Entrada") return false;
+    if (!h.item || !h.item.includes(" - V")) return false;
+
+    let partes = h.item.split(" - V");
+    let item = partes[0];
+    let versao = partes[1];
+
+    // Reconstrói o QR simplificado da entrada do histórico
+    let qrDoHistorico = item + "/" + versao + "/" + Math.round(h.qtd);
+    if (h.data) {
+      let partesDataH = h.data.split(", ");
+      if (partesDataH.length === 2) {
+        let dmaH = partesDataH[0].split("/");
+        let hmsH = partesDataH[1].replace(/:/g, "");
+        if (dmaH.length === 3 && hmsH.length === 6) {
+          qrDoHistorico += "/" + dmaH[0] + dmaH[1] + dmaH[2] + "/" + hmsH;
+        }
+      }
+    }
+
+    // Compara QR completo reconstruído
+    if (qrLido === qrDoHistorico) return true;
+
+    // Compara id direto (se o id salvo é o próprio QR simplificado)
+    let idHist = String(h.id || "");
+    let idDados = String(dados.id || "");
+    if (idDados && idHist === idDados) return true;
+
+    return false;
+  }) || null;
+}
+
+function mostrarResultadoQR(dados, registro) {
+  qrLidoAtual = { dados, registro };
+
+  let status = "";
+  let statusTipo = "";
+
+  if (registro) {
+    if (registro._removidaEstoque) {
+      status = `<div style="margin-top:8px; color:#dc2626;"><strong>⚠️ Status:</strong> excluída do estoque</div>`;
+      statusTipo = "excluida";
+    } else if (registro.consumida) {
+      status = `<div style="margin-top:8px; color:#ca8a04;"><strong>⚠️ Status:</strong> consumida</div>`;
+      statusTipo = "consumida";
+    } else {
+      status = `<div style="margin-top:8px; color:#16a34a;"><strong>✅ Status:</strong> ativa no estoque</div>
+                <div style="margin-top:4px; padding:6px 10px; background:#fef3c7; border-radius:6px; color:#92400e; font-size:13px; font-weight:600;">
+                  ⚠️ Esta bobina já está no estoque — entrada duplicada não permitida
+                </div>`;
+      statusTipo = "ativa";
+    }
+  } else {
+    status = `<div style="margin-top:8px; color:#3b82f6;"><strong>🆕 Status:</strong> bobina nova (não encontrada no histórico)</div>`;
+    statusTipo = "nova";
+  }
+
+ // Extrai a parte da data/hora bruta do QR (ddmmaaaa/hhmmss)
+// Extrai a data de produção do QR
+  let etiquetaData = "-";
+  
+  // Tenta pegar do id (formato simplificado completo)
+  if (dados.id && dados.id.includes("/")) {
+    let partesId = dados.id.split("/");
+    if (partesId.length >= 5) {
+      let d = partesId[3];
+      let h = partesId[4];
+      if (h.length === 4) h = h + "00";
+      if (d.length === 8 && h.length === 6) {
+        etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
+          " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+      }
+    }
+  }
+  
+  // Fallback: tenta da dataBruta
+  if (etiquetaData === "-" && dados.dataBruta) {
+    let d = dados.dataBruta.split("/")[0];
+    let h = dados.dataBruta.split("/")[1];
+    if (h && h.length === 4) h = h + "00";
+    if (d && d.length === 8 && h && h.length === 6) {
+      etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
+        " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+    }
+  }
+
+  let html = `
+    <div><strong>Item:</strong> ${dados.item || '-'}</div>
+    <div><strong>Versão:</strong> ${dados.versao || '-'}</div>
+    <div><strong>Peso:</strong> ${dados.peso || '-'} kg</div>
+    <div><strong>Tipo:</strong> ${dados.tipo ? nomeCompletoTipo(dados.tipo) : '-'}</div>
+    <div><strong>Data de Produção:</strong> ${etiquetaData}</div>
+    ${status}
+  `;
+
+  document.getElementById("resultadoQRConteudo").innerHTML = html;
+
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let itemExiste = tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)];
+
+  let btnUsar = document.getElementById("btnUsarQRMov");
+  let btnEntradaRapida = document.getElementById("btnEntradaRapidaQR");
+  let btnConsumir = document.getElementById("btnConsumirQR");
+  let btnDesmarcar = document.getElementById("btnDesmarcarQR");
+  let btnExcluir = document.getElementById("btnExcluirQR");
+
+  if (btnUsar) btnUsar.style.display = "none";
+  if (btnEntradaRapida) btnEntradaRapida.style.display = "none";
+  if (btnConsumir) btnConsumir.style.display = "none";
+  if (btnDesmarcar) btnDesmarcar.style.display = "none";
+  if (btnExcluir) btnExcluir.style.display = "none";
+
+  if (itemExiste) {
+    if (statusTipo === "nova") {
+      if (btnUsar) btnUsar.style.display = "block";
+      if (btnEntradaRapida) btnEntradaRapida.style.display = "block";
+    } else if (statusTipo === "ativa") {
+      if (btnUsar) btnUsar.style.display = "block";
+      if (btnConsumir) btnConsumir.style.display = "block";
+      if (btnExcluir) btnExcluir.style.display = "block";
+    } else if (statusTipo === "consumida") {
+      if (btnDesmarcar) btnDesmarcar.style.display = "block";
+    }
+  }
+
+  document.getElementById("modalResultadoQR").classList.remove("hidden");
+}
+
+function usarQRNaMovimentacao() {
+  if (!qrLidoAtual || !qrLidoAtual.dados) return;
+
+  let dados = qrLidoAtual.dados;
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let item = dados.item;
+  let versao = String(dados.versao);
+  let peso = dados.peso;
+
+  if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
+    mostrarToast("Item do QR não encontrado no cadastro", "erro");
+    return;
+  }
+
+  // Preenche tipo
+  tipoSelect.value = tipo;
+  filtrarPorTipo();
+
+  // Preenche item
+  itemSelect.value = item;
+  itemSelect.dispatchEvent(new Event("change"));
+
+  // Preenche versão
+  versaoSelect.value = versao;
+  atualizarSaldoAtual(item, versao);
+
+  // Preenche busca manual
+  let tamanho = banco[tipo][item][versao].tamanho || "";
+  document.getElementById("buscaItem").value = item + " - V" + versao + " (" + tamanho + ")";
+
+  // Preenche peso
+  quantidade.value = peso || "";
+
+  // Garante que está na tela de movimentação
+  mostrarTela("movimentar");
+
+  fecharResultadoQR();
+
+  // Se tem peso, foca no botão de ação. Se não, foca no campo peso
+  if (peso) {
+    mostrarToast("Dados carregados pelo QR");
+  } else {
+    quantidade.focus();
+    mostrarToast("Item carregado — informe o peso");
+  }
+}
+
+function entradaRapidaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.dados) return;
+
+  let dados = qrLidoAtual.dados;
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let item = dados.item;
+  let versao = String(dados.versao);
+  let peso = parseFloat(dados.peso);
+
+  if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
+    mostrarToast("Item não encontrado no cadastro", "erro");
+    return;
+  }
+
+  if (!peso || peso <= 0) {
+    mostrarToast("Peso inválido no QR", "erro");
+    return;
+  }
+
+  // Verifica se já existe no histórico
+  let registroExistente = localizarRegistroPorQR(dados);
+  if (registroExistente) {
+    let status = "";
+    if (registroExistente._removidaEstoque) status = "excluída";
+    else if (registroExistente.consumida) status = "consumida";
+    else status = "ativa no estoque";
+
+    mostrarToast("Bobina já registrada (" + status + ")", "erro");
+    return;
+  }
+
+  salvarEstadoParaDesfazer();
+
+  let identificador = item + " - V" + versao;
+
+  // Usa a data do QR
+  let dataEntrada = dados.data || new Date().toLocaleString();
+
+  // Salva o id como o conteúdo completo do QR para comparação futura
+  let idSalvar = dados.id || (Date.now() + Math.random());
+
+  estoque[identificador] = (estoque[identificador] || 0) + peso;
+  estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
+
+  historico.push({
+    id: idSalvar,
+    data: dataEntrada,
+    tipo: "Entrada",
+    item: identificador,
+    qtd: peso
+  });
+
+  ultimoItem = identificador;
+  salvarDados();
+  atualizarTudo();
+
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast(identificador + " adicionado via QR");
+}
+
+function consumirBobinaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.registro) return;
+
+  let reg = qrLidoAtual.registro;
+  let chave = reg.item;
+
+  if (reg.consumida) {
+    mostrarToast("Bobina já consumida", "erro");
+    return;
+  }
+
+  salvarEstadoParaDesfazer();
+
+  reg.consumida = true;
+
+  if (estoque[chave]) {
+    estoque[chave] -= reg.qtd;
+    if (estoque[chave] <= 0) {
+      delete estoque[chave];
+      delete estoque[chave + "_qtd"];
+    } else if (estoque[chave + "_qtd"] > 0) {
+      estoque[chave + "_qtd"]--;
+    }
+  }
+
+  historico.push({
+    id: Date.now() + Math.random(),
+    data: new Date().toLocaleString(),
+    tipo: "Consumo",
+    item: chave,
+    qtd: reg.qtd,
+    refEntradaId: reg.id,
+    refEntradaData: reg.data
+  });
+
+  salvarDados();
+  atualizarTudo();
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast("Bobina consumida via QR");
+}
+
+function desmarcarConsumidaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.registro) return;
+
+  let reg = qrLidoAtual.registro;
+  let chave = reg.item;
+
+  if (!reg.consumida) {
+    mostrarToast("Bobina não está consumida", "erro");
+    return;
+  }
+
+  salvarEstadoParaDesfazer();
+
+  reg.consumida = false;
+
+  estoque[chave] = (estoque[chave] || 0) + reg.qtd;
+  estoque[chave + "_qtd"] = (estoque[chave + "_qtd"] || 0) + 1;
+
+  // Remove registro de consumo correspondente
+  for (let i = historico.length - 1; i >= 0; i--) {
+    if (historico[i].tipo === "Consumo" && historico[i].refEntradaId === reg.id) {
+      historico.splice(i, 1);
+      break;
+    }
+  }
+
+  salvarDados();
+  atualizarTudo();
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast("Consumo desmarcado via QR");
+}
+
+function excluirBobinaQR() {
+  if (!qrLidoAtual || !qrLidoAtual.registro) return;
+
+  let reg = qrLidoAtual.registro;
+  let chave = reg.item;
+
+  if (!confirm("Excluir esta bobina do estoque?")) return;
+
+  salvarEstadoParaDesfazer();
+
+  if (!reg.consumida && estoque[chave]) {
+    estoque[chave] -= reg.qtd;
+    if (estoque[chave + "_qtd"] > 0) estoque[chave + "_qtd"]--;
+    if (estoque[chave] <= 0) {
+      delete estoque[chave];
+      delete estoque[chave + "_qtd"];
+    }
+  }
+
+  reg._removidaEstoque = true;
+
+  historico.push({
+    id: Date.now() + Math.random(),
+    data: new Date().toLocaleString(),
+    tipo: "Exclusão",
+    item: chave,
+    qtd: reg.qtd,
+    refEntradaId: reg.id,
+    refEntradaData: reg.data
+  });
+
+  salvarDados();
+  atualizarTudo();
+  fecharResultadoQR();
+
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  mostrarToast("Bobina excluída via QR");
+}
+
+function fecharResultadoQR() {
+  document.getElementById("modalResultadoQR").classList.add("hidden");
+  qrLidoAtual = null;
+}
+
+window.fecharResultadoQR = fecharResultadoQR;
+window.usarQRNaMovimentacao = usarQRNaMovimentacao;
+window.entradaRapidaQR = entradaRapidaQR;
+window.consumirBobinaQR = consumirBobinaQR;
+window.desmarcarConsumidaQR = desmarcarConsumidaQR;
+window.excluirBobinaQR = excluirBobinaQR;
+window.abrirScannerQR = abrirScannerQR;
+window.fecharScannerQR = fecharScannerQR;
+window.gerarQRBobina = gerarQRBobina;
+window.abrirAcoesHistorico = abrirAcoesHistorico;
+window.fecharModalHistoricoAcoes = fecharModalHistoricoAcoes;
+window.abrirQRDoHistorico = abrirQRDoHistorico;
+window.confirmarRemoverHistoricoSelecionado = confirmarRemoverHistoricoSelecionado;
+window.abrirScannerContinuo = abrirScannerContinuo;
+window.fecharScannerContinuo = fecharScannerContinuo;
+
+/* ================= SCANNER CONTÍNUO ================= */
+
+let leitorContinuo = null;
+let leitorContinuoAberto = false;
+let continuoProcessando = false;
+let continuoContagem = 0;
+let continuoIdsLidos = [];
+
+async function abrirScannerContinuo() {
+  continuoContagem = 0;
+  continuoIdsLidos = [];
+  continuoProcessando = false;
+
+  document.getElementById("modalScannerContinuo").classList.remove("hidden");
+  document.getElementById("continuoContador").textContent = "0 bobinas adicionadas";
+  document.getElementById("continuoLog").innerHTML = "";
+  document.getElementById("readerContinuo").innerHTML = "";
+
+  try {
+    leitorContinuo = new Html5Qrcode("readerContinuo");
+
+    const cameras = await Html5Qrcode.getCameras();
+    if (!cameras || cameras.length === 0) {
+      mostrarToast("Nenhuma câmera encontrada", "erro");
+      fecharScannerContinuo();
+      return;
+    }
+
+    await leitorContinuo.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: { width: 220, height: 220 }
+      },
+      async (decodedText) => {
+        if (continuoProcessando) return;
+        continuoProcessando = true;
+        await processarLeituraContinua(decodedText);
+        // Pequeno delay para não ler o mesmo QR duas vezes
+        setTimeout(() => { continuoProcessando = false; }, 1500);
+      },
+      () => {}
+    );
+
+    leitorContinuoAberto = true;
+  } catch (erro) {
+    console.error(erro);
+    mostrarToast("Não foi possível abrir a câmera", "erro");
+    fecharScannerContinuo();
+  }
+}
+
+async function fecharScannerContinuo() {
+  try {
+    if (leitorContinuo && leitorContinuoAberto) {
+      await leitorContinuo.stop();
+      await leitorContinuo.clear();
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner contínuo:", e);
+  }
+
+  leitorContinuo = null;
+  leitorContinuoAberto = false;
+  continuoProcessando = false;
+
+  document.getElementById("modalScannerContinuo").classList.add("hidden");
+  document.getElementById("readerContinuo").innerHTML = "";
+
+  if (continuoContagem > 0) {
+    atualizarTudo();
+    mostrarToast(continuoContagem + " bobina(s) adicionada(s)");
+  }
+}
+
+async function processarLeituraContinua(textoLido) {
+  let dados = null;
+  let agora = new Date().toLocaleTimeString();
+
+  // Tenta JSON primeiro, depois formato simplificado
+  try {
+    dados = JSON.parse(textoLido);
+  } catch (e) {
+    dados = interpretarQRSimplificado(textoLido);
+  }
+
+  if (!dados) {
+    adicionarLogContinuo("⚠️ " + agora + " — QR inválido", "erro");
+    return;
+  }
+
+  // Verifica se já leu nesta sessão
+  let idQR = dados.id || (dados.item + "/V" + dados.versao + "/" + dados.data);
+  if (continuoIdsLidos.includes(idQR)) {
+    adicionarLogContinuo("⏭️ " + agora + " — " + dados.item + " V" + dados.versao + " — já lido", "duplicado");
+    if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
+    return;
+  }
+
+  // Verifica cadastro
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let item = dados.item;
+  let versao = String(dados.versao);
+  let peso = parseFloat(dados.peso);
+
+  if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
+    adicionarLogContinuo("❌ " + agora + " — " + item + " V" + versao + " — não cadastrado", "erro");
+    if (navigator.vibrate) navigator.vibrate([200]);
+    return;
+  }
+
+  if (!peso || peso <= 0) {
+    adicionarLogContinuo("❌ " + agora + " — " + item + " V" + versao + " — peso inválido", "erro");
+    if (navigator.vibrate) navigator.vibrate([200]);
+    return;
+  }
+
+  // Verifica duplicidade no histórico
+  let registro = localizarRegistroPorQR(dados);
+  if (registro) {
+    adicionarLogContinuo("⚠️ " + agora + " — " + item + " V" + versao + " — já no estoque", "duplicado");
+    if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
+    return;
+  }
+
+// ENTRADA RÁPIDA
+  salvarEstadoParaDesfazer();
+
+  let identificador = item + " - V" + versao;
+  estoque[identificador] = (estoque[identificador] || 0) + peso;
+  estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
+
+  // Usa data e id do QR
+  let dataEntrada = dados.data || new Date().toLocaleString();
+  let idEntrada = dados.id || (Date.now() + Math.random());
+
+  historico.push({
+    id: idEntrada,
+    data: dataEntrada,
+    tipo: "Entrada",
+    item: identificador,
+    qtd: peso
+  });
+
+  ultimoItem = identificador;
+  salvarDados();
+
+  continuoIdsLidos.push(idQR);
+  continuoContagem++;
+
+  document.getElementById("continuoContador").textContent = continuoContagem + " bobina(s) adicionada(s)";
+  adicionarLogContinuo("✅ " + agora + " — " + item + " V" + versao + " — " + Math.round(peso) + "kg", "sucesso");
+
+  if (navigator.vibrate) navigator.vibrate([100]);
+}
+
+function adicionarLogContinuo(texto, tipo) {
+  let log = document.getElementById("continuoLog");
+  let div = document.createElement("div");
+  div.textContent = texto;
+  div.style.padding = "3px 0";
+  div.style.borderBottom = "1px solid #f1f5f9";
+
+  if (tipo === "sucesso") div.style.color = "#16a34a";
+  else if (tipo === "erro") div.style.color = "#dc2626";
+  else if (tipo === "duplicado") div.style.color = "#ca8a04";
+
+  // Insere no topo
+  if (log.firstChild) log.insertBefore(div, log.firstChild);
+  else log.appendChild(div);
+}
+
+function descobrirTipoPorItem(item) {
+  let tipoEncontrado = "";
+  Object.keys(banco).forEach(tipo => {
+    if (banco[tipo] && banco[tipo][item]) tipoEncontrado = tipo;
+  });
+  return tipoEncontrado;
+}
+
+/* ================= EXPORTAR QR CODES ================= */
+function coletarBobinasParaQR(dataInicioP, dataFimP) {
+  let bobinas = [];
+
+  historico.forEach((h, index) => {
+    if (h.tipo !== "Entrada") return;
+    if (h._removidaEstoque) return;
+
+    // Filtro por período
+    if (dataInicioP || dataFimP) {
+      let dataISO = h.data.split(",")[0].trim().split("/").reverse().join("-");
+      if (dataInicioP && dataISO < dataInicioP) return;
+      if (dataFimP && dataISO > dataFimP) return;
+    }
+
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0];
+    let versao = partes[1];
+
+    let tipo = "";
+    Object.keys(banco).forEach(t => {
+      if (banco[t] && banco[t][item]) tipo = t;
+    });
+
+    let tamanho = "";
+    if (tipo && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
+      tamanho = banco[tipo][item][versao].tamanho;
+    }
+
+    let status = h.consumida ? "consumida" : "ativa";
+
+    // Monta QR simplificado
+    let dataQR = "";
+    if (h.data) {
+      let partesData = h.data.split(", ");
+      if (partesData.length === 2) {
+        let dma = partesData[0].split("/");
+        let hms = partesData[1].replace(/:/g, "");
+        if (hms.length === 4) hms = hms + "00";
+        if (dma.length === 3 && hms.length === 6) {
+          dataQR = dma[0] + dma[1] + dma[2] + "/" + hms;
+        }
+      }
+    }
+
+    let conteudoQR = item + "/" + versao + "/" + Math.round(h.qtd);
+    if (dataQR) conteudoQR += "/" + dataQR;
+
+    // Extrai data de produção formatada
+    let dataProducao = "";
+    if (dataQR) {
+      let dParts = dataQR.split("/");
+      if (dParts.length === 2) {
+        let d = dParts[0];
+        let hr = dParts[1];
+        if (d.length === 8 && hr.length >= 4) {
+          if (hr.length === 4) hr = hr + "00";
+          dataProducao = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
+            " " + hr.substring(0,2) + ":" + hr.substring(2,4) + ":" + hr.substring(4,6);
+        }
+      }
+    }
+
+    bobinas.push({
+      index: index,
+      id: conteudoQR,
+      tipo: tipo,
+      tipoNome: nomeCompletoTipo(tipo),
+      item: item,
+      versao: versao,
+      tamanho: tamanho,
+      peso: Math.round(h.qtd),
+      data: h.data,
+      dataProducao: dataProducao,
+      status: status,
+      qrData: conteudoQR
+    });
+  });
+
+  return bobinas;
+}
+
+function exportarQRCodes(dataInicioP, dataFimP) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada para gerar QR", "erro");
+    return;
+  }
+
+  // Abre modal de progresso
+  let modalHTML = `
+    <div class="modal-overlay" id="modalProgressoQR">
+      <div class="modal-content" style="text-align:center; max-width:350px;">
+        <h3 style="margin-bottom:12px;">Gerando QR Codes</h3>
+        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
+        <div class="barra" style="margin:12px 0;">
+          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
+        </div>
+        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
+      </div>
+    </div>
+  `;
+
+  let divModal = document.createElement('div');
+  divModal.innerHTML = modalHTML;
+  document.body.appendChild(divModal.firstElementChild);
+
+  setTimeout(() => {
+    gerarQRCodesEmLote(bobinas);
+  }, 100);
+}
+
+async function gerarQRCodesEmLote(bobinas) {
+  let container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+  document.body.appendChild(container);
+
+  let resultados = [];
+
+  for (let i = 0; i < bobinas.length; i++) {
+    let bob = bobinas[i];
+
+    // Atualiza progresso
+    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
+    let textoEl = document.getElementById('progressoQRTexto');
+    let barraEl = document.getElementById('progressoQRBarra');
+    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
+    if (barraEl) barraEl.style.width = progresso + "%";
+
+    // Cria div temporária para o QR
+    let qrDiv = document.createElement('div');
+    qrDiv.id = 'tempQR_' + i;
+    container.appendChild(qrDiv);
+
+    // Gera QR e espera a imagem ficar pronta
+    let dataUrl = await new Promise((resolve) => {
+      new QRCode(qrDiv, {
+        text: bob.qrData,
+        width: 300,
+        height: 300,
+        colorDark: "#1e293b",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      // Aguarda canvas ou imagem ficar disponível
+      let tentativas = 0;
+      let verificar = setInterval(() => {
+        tentativas++;
+        let canvas = qrDiv.querySelector('canvas');
+        let img = qrDiv.querySelector('img');
+
+        if (canvas) {
+          clearInterval(verificar);
+          resolve(canvas.toDataURL('image/png'));
+        } else if (img && img.complete && img.naturalWidth > 0) {
+          clearInterval(verificar);
+          // Desenha a imagem num canvas para pegar dataURL
+          let c = document.createElement('canvas');
+          c.width = 300;
+          c.height = 300;
+          let ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, 300, 300);
+          resolve(c.toDataURL('image/png'));
+        } else if (img && !img.complete) {
+          clearInterval(verificar);
+          img.onload = function() {
+            let c = document.createElement('canvas');
+            c.width = 300;
+            c.height = 300;
+            let ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, 300, 300);
+            resolve(c.toDataURL('image/png'));
+          };
+          img.onerror = function() {
+            resolve("");
+          };
+        } else if (tentativas > 50) {
+          clearInterval(verificar);
+          resolve("");
+        }
+      }, 50);
+    });
+
+    resultados.push({
+      ...bob,
+      dataUrl: dataUrl
+    });
+
+    // Permite atualizar a UI
+    await new Promise(r => setTimeout(r, 10));
+  }
+
+  // Remove container temporário
+  container.remove();
+
+  // Remove modal de progresso
+  let modalProgresso = document.getElementById('modalProgressoQR');
+  if (modalProgresso) modalProgresso.remove();
+
+  // Gera o arquivo
+  gerarPDFComQRCodes(resultados);
+}
+function gerarPDFComQRCodes(resultados) {
+  if (resultados.length === 0) {
+    mostrarToast("Nenhum QR gerado", "erro");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  const agora = new Date().toLocaleString('pt-BR');
+
+  // Configurações de layout - 3 colunas x 5 linhas = 15 por página
+  const margem = 10;
+  const cols = 3;
+  const linhas = 5;
+  const larguraUtil = 210 - (margem * 2);
+  const alturaUtil = 297 - (margem * 2) - 10;
+  const larguraCell = larguraUtil / cols;
+  const alturaCell = alturaUtil / linhas;
+  const qrSize = Math.min(larguraCell - 8, alturaCell - 22);
+
+  let pagina = 0;
+
+  for (let i = 0; i < resultados.length; i++) {
+    let posNaPagina = i % (cols * linhas);
+
+    if (posNaPagina === 0) {
+      if (i > 0) doc.addPage();
+      pagina++;
+
+      doc.setFillColor(30, 58, 138);
+      doc.rect(0, 0, 210, 10, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('QR Codes — Conferência de Estoques', margem, 7);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Página ' + pagina + ' | ' + agora, 210 - margem, 7, { align: 'right' });
+      doc.setTextColor(0, 0, 0);
+    }
+
+    let col = posNaPagina % cols;
+    let lin = Math.floor(posNaPagina / cols);
+
+    let x = margem + (col * larguraCell);
+    let y = 12 + (lin * alturaCell);
+
+    let bob = resultados[i];
+
+    // Borda do card
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(x + 1, y + 1, larguraCell - 2, alturaCell - 2, 2, 2, 'S');
+
+    // QR Code
+    if (bob.dataUrl) {
+      let qrX = x + (larguraCell - qrSize) / 2;
+      let qrY = y + 3;
+      doc.addImage(bob.dataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
+    }
+
+    // Texto abaixo do QR
+    let textoY = y + qrSize + 5;
+
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.text(bob.item + ' — V' + bob.versao, x + larguraCell / 2, textoY, { align: 'center' });
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'normal');
+    doc.text(bob.tamanho + ' | ' + bob.peso + 'kg', x + larguraCell / 2, textoY + 3.5, { align: 'center' });
+
+    // Data de produção formatada
+    doc.setFontSize(5);
+    doc.setTextColor(120, 120, 120);
+    doc.text(bob.dataProducao || bob.id, x + larguraCell / 2, textoY + 6.5, { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+  }
+
+  doc.save("QR_Codes_" + getTimestamp() + ".pdf");
+  mostrarToast(resultados.length + " QR codes exportados");
+}    
+
+// Exportar QR codes individuais como imagens ZIP
+async function exportarQRCodesZIP(dataInicioP, dataFimP) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada", "erro");
+    return;
+  }
+
+  // Abre modal de progresso
+  let modalHTML = `
+    <div class="modal-overlay" id="modalProgressoQR">
+      <div class="modal-content" style="text-align:center; max-width:350px;">
+        <h3 style="margin-bottom:12px;">Gerando imagens QR</h3>
+        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
+        <div class="barra" style="margin:12px 0;">
+          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
+        </div>
+        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
+      </div>
+    </div>
+  `;
+
+  let divModal = document.createElement('div');
+  divModal.innerHTML = modalHTML;
+  document.body.appendChild(divModal.firstElementChild);
+
+  setTimeout(async () => {
+    await gerarImagensQRIndividuais(bobinas);
+  }, 100);
+}
+
+async function gerarImagensQRIndividuais(bobinas) {
+  let container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+  document.body.appendChild(container);
+
+  let arquivos = [];
+
+  for (let i = 0; i < bobinas.length; i++) {
+    let bob = bobinas[i];
+
+    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
+    let textoEl = document.getElementById('progressoQRTexto');
+    let barraEl = document.getElementById('progressoQRBarra');
+    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
+    if (barraEl) barraEl.style.width = progresso + "%";
+
+    // Gera QR em div temporária
+    let qrDiv = document.createElement('div');
+    qrDiv.id = 'tempQR_' + i;
+    container.appendChild(qrDiv);
+
+    // Aguarda QR ficar pronto
+    let qrDataUrl = await new Promise((resolve) => {
+      new QRCode(qrDiv, {
+        text: bob.qrData,
+        width: 300,
+        height: 300,
+        colorDark: "#1e293b",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      let tentativas = 0;
+      let verificar = setInterval(() => {
+        tentativas++;
+        let canvas = qrDiv.querySelector('canvas');
+        let img = qrDiv.querySelector('img');
+
+        if (canvas) {
+          clearInterval(verificar);
+          resolve(canvas.toDataURL('image/png'));
+        } else if (img && img.complete && img.naturalWidth > 0) {
+          clearInterval(verificar);
+          let c = document.createElement('canvas');
+          c.width = 300;
+          c.height = 300;
+          let ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, 300, 300);
+          resolve(c.toDataURL('image/png'));
+        } else if (img && !img.complete) {
+          clearInterval(verificar);
+          img.onload = function() {
+            let c = document.createElement('canvas');
+            c.width = 300;
+            c.height = 300;
+            let ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, 300, 300);
+            resolve(c.toDataURL('image/png'));
+          };
+          img.onerror = function() { resolve(""); };
+        } else if (tentativas > 50) {
+          clearInterval(verificar);
+          resolve("");
+        }
+      }, 50);
+    });
+
+    // Cria canvas para etiqueta completa
+    let canvas = document.createElement('canvas');
+    let largura = 400;
+    let altura = 500;
+    canvas.width = largura;
+    canvas.height = altura;
+    let ctx = canvas.getContext('2d');
+
+    // Fundo branco
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, largura, altura);
+
+    // Desenha QR no canvas
+    if (qrDataUrl) {
+      await new Promise((resolve) => {
+        let tempImg = new Image();
+        tempImg.onload = function() {
+          ctx.drawImage(tempImg, 50, 10, 300, 300);
+          resolve();
+        };
+        tempImg.onerror = function() { resolve(); };
+        tempImg.src = qrDataUrl;
+      });
+    }
+
+// Texto
+    ctx.fillStyle = '#1e293b';
+    ctx.textAlign = 'center';
+
+    ctx.font = 'bold 22px Arial';
+    ctx.fillText(bob.item + ' — V' + bob.versao, largura / 2, 340);
+
+    ctx.font = '18px Arial';
+    ctx.fillText(bob.tamanho + ' | ' + bob.peso + ' kg', largura / 2, 370);
+
+    // Data de produção
+    let producaoTexto = "";
+    if (bob.data) {
+      let partesData = bob.data.split(", ");
+      if (partesData.length === 2) {
+        producaoTexto = "Produção: " + partesData[0] + " às " + partesData[1];
+      }
+    }
+
+    ctx.font = '14px Arial';
+    ctx.fillStyle = '#64748b';
+    ctx.fillText(producaoTexto || "", largura / 2, 395);
+
+    ctx.font = '12px Arial';
+    ctx.fillText(bob.tipoNome, largura / 2, 415);
+
+    // Converte para blob
+    let blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
+    let nomeArquivo = bob.item + "_V" + bob.versao + "_" + bob.peso + "kg.png";
+    nomeArquivo = nomeArquivo.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    arquivos.push({ nome: nomeArquivo, blob: blob });
+
+    await new Promise(r => setTimeout(r, 10));
+  }
+
+  container.remove();
+
+  let modalProgresso = document.getElementById('modalProgressoQR');
+  if (modalProgresso) modalProgresso.remove();
+
+  if (arquivos.length === 1) {
+    let link = document.createElement('a');
+    link.href = URL.createObjectURL(arquivos[0].blob);
+    link.download = arquivos[0].nome;
+    link.click();
+  } else {
+    mostrarToast(arquivos.length + " imagens QR sendo baixadas...");
+    for (let i = 0; i < arquivos.length; i++) {
+      let link = document.createElement('a');
+      link.href = URL.createObjectURL(arquivos[i].blob);
+      link.download = arquivos[i].nome;
+      link.click();
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+
+  mostrarToast(arquivos.length + " QR codes exportados como imagens");
+}
+
+window.exportarQRCodes = exportarQRCodes;
+window.exportarQRCodesZIP = exportarQRCodesZIP;
+
+window.ajustarFormatoQR = function() {
+  let tipoDados = document.querySelector('input[name="tipoDados"]:checked');
+  let blocoFormatoQR = document.getElementById("blocoFormatoQR");
+  let blocoFormatoNormal = document.getElementById("blocoFormatoNormal");
+
+  if (!blocoFormatoQR || !blocoFormatoNormal) return;
+
+  if (tipoDados && tipoDados.value === 'qrcodes') {
+    blocoFormatoQR.classList.remove('hidden');
+    blocoFormatoNormal.classList.add('hidden');
+    // Seleciona PDF como padrão para QR
+    let radioPdf = blocoFormatoQR.querySelector('input[value="pdf"]');
+    if (radioPdf) radioPdf.checked = true;
+  } else if (tipoDados && tipoDados.value === 'backup') {
+    blocoFormatoQR.classList.add('hidden');
+    blocoFormatoNormal.classList.add('hidden');
+  } else {
+    blocoFormatoQR.classList.add('hidden');
+    blocoFormatoNormal.classList.remove('hidden');
+  }
+};
+function interpretarQRSimplificado(texto) {
+  if (!texto || !texto.includes("/")) return null;
+
+  let partes = texto.split("/");
+
+  // Formato: item/versao/peso/ddmmaaaa/hhmmss ou hhmm
+  if (partes.length < 3) return null;
+
+  let item = partes[0];
+  let versao = partes[1];
+  let peso = parseFloat(partes[2]);
+
+  if (!item || !versao || isNaN(peso) || peso <= 0) return null;
+
+  // Monta data se tiver
+  let dataFormatada = "";
+  let dataBruta = "";
+  if (partes.length >= 5) {
+    let d = partes[3]; // ddmmaaaa
+    let h = partes[4]; // hhmmss ou hhmm
+
+    // Completa segundos se não tiver
+    if (h.length === 4) h = h + "00";
+
+    if (d.length === 8 && h.length === 6) {
+      dataFormatada = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
+        ", " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+      dataBruta = d + "/" + h;
+    }
+  }
+
+  // O id é o próprio conteúdo completo do QR
+  let idUnico = texto;
+
+  // Se a hora era 4 dígitos, normaliza o id com 6
+  if (partes.length >= 5 && partes[4].length === 4) {
+    idUnico = partes[0] + "/" + partes[1] + "/" + partes[2] + "/" + partes[3] + "/" + partes[4] + "00";
+  }
+
+  // Descobre o tipo pelo item
+  let tipo = descobrirTipoPorItem(item);
+
+  return {
+    id: idUnico,
+    tipo: tipo,
+    item: item,
+    versao: versao,
+    peso: peso,
+    data: dataFormatada,
+    dataBruta: dataBruta
+  };
+}
