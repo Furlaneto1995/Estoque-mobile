@@ -1357,3 +1357,139 @@ body.dark-mode .config-fechar { color: #94a3b8; }
 body.dark-mode .config-fechar:hover { background: #3f1d1d; color: #fca5a5; }
 
 #btnConfig { font-size: 16px; }
+
+.btn-qr {
+  background: #1e3a8a;
+  color: white;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin: 2px auto 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-qr:active { transform: scale(0.92); }
+
+body.dark-mode .btn-qr { background: #3b82f6; }
+
+.btn-menu-historico {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin: auto;
+  background: #64748b;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.btn-menu-historico:active {
+  transform: scale(0.92);
+}
+
+body.dark-mode .btn-menu-historico {
+  background: #475569;
+}
+
+.btn-scan-qr {
+  background: #0f766e;
+  color: white;
+  font-weight: 600;
+}
+
+.btn-scan-qr:active {
+  transform: scale(0.97);
+}
+
+body.dark-mode .btn-scan-qr {
+  background: #0f766e;
+}
+
+.qr-info {
+  text-align: center;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.5;
+}
+
+body.dark-mode .qr-info {
+  color: #e2e8f0;
+}
+
+.btn-scan-continuo {
+  background: #0e7490;
+  color: white;
+  font-weight: 600;
+}
+
+.btn-scan-continuo:active {
+  transform: scale(0.97);
+}
+
+body.dark-mode .btn-scan-continuo {
+  background: #0e7490;
+}
+
+.qr-actions-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.qr-actions-row button {
+  flex: 1;
+  margin: 0;
+}
+
+.btn-scan-compact {
+  padding: 8px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .btn-scan-compact {
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+}
+
+/* Garante que os modais de scanner fiquem no topo de tudo */
+#modalScannerQR, #modalScannerContinuo {
+  z-index: 10000 !important;
+  background: rgba(0, 0, 0, 0.85); /* Fundo mais escuro para focar na câmera */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Garante que o container da câmera tenha um tamanho visível */
+#reader, #readerContinuo {
+  width: 100% !important;
+  max-width: 350px;
+  margin: 0 auto;
+  border-radius: 12px;
+  overflow: hidden;
+  background: black;
+}
+
+/* Ajuste do conteúdo do modal para mobile */
+.modal-saida-content {
+  width: 95%;
+  max-height: 95vh;
+  overflow-y: auto;
+}
