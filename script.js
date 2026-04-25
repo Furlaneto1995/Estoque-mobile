@@ -897,18 +897,51 @@ window.executarExportacao = function(){
   if (tipoPeriodo === 'periodo') {
     dataInicioExp = document.getElementById("exportDataInicio").value;
     dataFimExp = document.getElementById("exportDataFim").value;
+    if (!dataInicioExp && !dataFimExp) {
+      mostrarToast("Informe pelo menos uma data", "erro");
+      return;
+    }
   }
   const formatoSelecionado = document.querySelector('input[name="formatoExport"]:checked');
   const formato = formatoSelecionado ? formatoSelecionado.value : 'excel';
 
   if (tipoDados === 'qrcodes') {
-    if (formato === 'imagens') {
+    let bobinas = coletarBobinasParaQR(dataInicioExp, dataFimExp);
+    if (bobinas.length === 0) {
+      mostrarToast("Nenhuma bobina encontrada no período", "erro");
+      return;
+    }
+
+    if (formato === 'zpl') {
+      exportarZPLZebra(dataInicioExp, dataFimExp);
+    } else if (formato === 'imagens') {
       exportarQRCodesZIP(dataInicioExp, dataFimExp);
-    } else {
-      exportarQRCodes(dataInicioExp, dataFimExp);
+    } else if (formato === 'csv') {
+      exportarCSVZebraMult(dataInicioExp, dataFimExp, 6);
     }
     fecharModalConfig();
     return;
+  }
+
+
+  if (tipoDados === 'estoque') {
+    let temDados = Object.keys(estoque).some(k => !k.endsWith('_qtd'));
+    if (!temDados) {
+      mostrarToast("Estoque vazio", "erro");
+      return;
+    }
+  }
+
+  if (tipoDados === 'historico') {
+    let dadosFiltrados = historico.filter(h => {
+      if (!dataInicioExp && !dataFimExp) return true;
+      let dataISO = h.data.split(",")[0].trim().split("/").reverse().join("-");
+      return (!dataInicioExp || dataISO >= dataInicioExp) && (!dataFimExp || dataISO <= dataFimExp);
+    });
+    if (dadosFiltrados.length === 0) {
+      mostrarToast("Nenhum registro encontrado no período", "erro");
+      return;
+    }
   }
 
   if (formato === 'pdf') {
@@ -919,7 +952,6 @@ window.executarExportacao = function(){
     if (tipoDados === 'estoque') exportarEstoque(dataInicioExp, dataFimExp);
     if (tipoDados === 'historico') exportarHistorico(dataInicioExp, dataFimExp);
     if (tipoDados === 'ambos') exportarAmbos(dataInicioExp, dataFimExp);
-    if (tipoDados === 'backup') exportarBackup();
   }
   fecharModalConfig();
 }
@@ -929,25 +961,151 @@ function getTimestamp(){
   return agora.getFullYear() + "-" + String(agora.getMonth()+1).padStart(2,"0") + "-" + String(agora.getDate()).padStart(2,"0") + "_" + String(agora.getHours()).padStart(2,"0") + "-" + String(agora.getMinutes()).padStart(2,"0");
 }
 
-function exportarEstoque(dataInicioP, dataFimP){
+function exportarEstoque(dataInicioP, dataFimP) {
   const wb = XLSX.utils.book_new();
+
   let dadosEstoque = [];
+  let totalGeral = 0;
+  let totalBobinasGeral = 0;
+  let totaisPorTipo = {};
+
   Object.keys(estoque).forEach(chave => {
     if (chave.endsWith('_qtd')) return;
     let partes = chave.split(" - V");
     if (partes.length < 2) return;
     let item = partes[0], versao = partes[1];
     let tipoInterno = "";
-    Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
+    Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
     if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
     let tamanho = banco[tipoInterno][item][versao].tamanho;
-    dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: estoque[chave] });
+    let peso = estoque[chave];
+    let qtdBobinas = estoque[chave + '_qtd'] || 0;
+
+    if (qtdBobinas === 0 && peso > 0) {
+      let entradasItem = historico.filter(h => h.item === chave && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
+      let soma = 0;
+      for (let idx = entradasItem.length - 1; idx >= 0; idx--) {
+        if (soma >= peso) break;
+        soma += entradasItem[idx].qtd;
+        qtdBobinas++;
+      }
+      if (qtdBobinas === 0) qtdBobinas = 1;
+    }
+
+    let nomeT = nomeCompletoTipo(tipoInterno);
+
+    totalGeral += peso;
+    totalBobinasGeral += qtdBobinas;
+
+    if (!totaisPorTipo[nomeT]) {
+      totaisPorTipo[nomeT] = { kg: 0, bobinas: 0 };
+    }
+    totaisPorTipo[nomeT].kg += peso;
+    totaisPorTipo[nomeT].bobinas += qtdBobinas;
+
+    dadosEstoque.push({
+      Tipo: nomeBonitoTipo(tipoInterno),
+      Item: item,
+      Versão: versao,
+      Medidas: tamanho,
+      Kg: peso,
+      Bobinas: qtdBobinas
+    });
   });
-  const wsEstoque = XLSX.utils.json_to_sheet(dadosEstoque);
-  wsEstoque['!autofilter'] = { ref: wsEstoque['!ref'] };
-  wsEstoque['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }];
-  XLSX.utils.book_append_sheet(wb, wsEstoque, "Estoque");
+
+  if (dadosEstoque.length === 0) {
+    mostrarToast("Estoque vazio", "erro");
+    return;
+  }
+
+  // Ordena por tipo
+  let ordemTipo = { 'BRF': 1, 'Tampa': 2, '1ª Lam.': 3 };
+  dadosEstoque.sort((a, b) => (ordemTipo[a.Tipo] || 99) - (ordemTipo[b.Tipo] || 99));
+
+  // ===== MONTA A PLANILHA =====
+
+  let linhas = [];
+
+  // Cabeçalho do relatório
+  linhas.push(['CONFERÊNCIA DE ESTOQUES', '', '', '', '', '']);
+  linhas.push(['Data do relatório:', new Date().toLocaleString('pt-BR'), '', '', '', '']);
+  linhas.push(['', '', '', '', '', '']);
+
+  // Resumo geral
+  linhas.push(['RESUMO GERAL', '', '', '', '', '']);
+  linhas.push(['Total em estoque:', '', '', '', formatarPeso(totalGeral) + ' kg', totalBobinasGeral + ' bobinas']);
+  linhas.push(['', '', '', '', '', '']);
+
+  // Resumo por tipo
+  linhas.push(['RESUMO POR TIPO', '', '', '', '', '']);
+  linhas.push(['Tipo', '', '', '', 'Kg', 'Bobinas']);
+
+  let tiposOrdem = ['BRF', 'Tampas', '1ª Laminação'];
+  tiposOrdem.forEach(nomeT => {
+    if (totaisPorTipo[nomeT]) {
+      let perc = totalGeral > 0 ? Math.round((totaisPorTipo[nomeT].kg / totalGeral) * 100) : 0;
+      linhas.push([nomeT, '', '', perc + '%', formatarPeso(totaisPorTipo[nomeT].kg) + ' kg', totaisPorTipo[nomeT].bobinas + ' bobinas']);
+    }
+  });
+
+  linhas.push(['', '', '', '', '', '']);
+  linhas.push(['', '', '', '', '', '']);
+
+  // Cabeçalho da tabela
+  linhas.push(['DETALHAMENTO', '', '', '', '', '']);
+  linhas.push(['Tipo', 'Item', 'Versão', 'Medidas', 'Kg', 'Bobinas']);
+
+  // Dados agrupados por tipo
+  let tipoAtual = '';
+  let subtotalKg = 0;
+  let subtotalBob = 0;
+
+  dadosEstoque.forEach((d, idx) => {
+    // Subtotal do tipo anterior quando muda
+    if (tipoAtual && d.Tipo !== tipoAtual) {
+      linhas.push(['', '', '', 'Subtotal ' + tipoAtual + ':', subtotalKg + ' kg', subtotalBob + ' bobinas']);
+      linhas.push(['', '', '', '', '', '']);
+      subtotalKg = 0;
+      subtotalBob = 0;
+    }
+
+    tipoAtual = d.Tipo;
+    subtotalKg += d.Kg;
+    subtotalBob += d.Bobinas;
+
+    linhas.push([d.Tipo, d.Item, d.Versão, d.Medidas, d.Kg, d.Bobinas]);
+
+    // Subtotal do último tipo
+    if (idx === dadosEstoque.length - 1) {
+      linhas.push(['', '', '', 'Subtotal ' + tipoAtual + ':', subtotalKg + ' kg', subtotalBob + ' bobinas']);
+    }
+  });
+
+  linhas.push(['', '', '', '', '', '']);
+  linhas.push(['', '', '', 'TOTAL GERAL:', formatarPeso(totalGeral) + ' kg', totalBobinasGeral + ' bobinas']);
+
+  const ws = XLSX.utils.aoa_to_sheet(linhas);
+
+  // Largura das colunas
+  ws['!cols'] = [
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 10 },
+    { wch: 20 },
+    { wch: 14 },
+    { wch: 14 }
+  ];
+
+  // Mescla o título
+  ws['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: 3 } },
+    { s: { r: 6, c: 0 }, e: { r: 6, c: 3 } }
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, "Estoque");
   XLSX.writeFile(wb, "Estoque_" + getTimestamp() + ".xlsx");
+  mostrarToast("Estoque exportado com sucesso");
 }
 
 function exportarHistorico(dataInicioP, dataFimP){
@@ -974,65 +1132,16 @@ function exportarHistorico(dataInicioP, dataFimP){
   XLSX.writeFile(wb, "Historico_" + getTimestamp() + ".xlsx");
 }
 
-function exportarAmbos(dataInicioP, dataFimP){
+function exportarAmbos(dataInicioP, dataFimP) {
   const wb = XLSX.utils.book_new();
-  let dadosEstoque = [];
-  Object.keys(estoque).forEach(chave => {
-    if (chave.endsWith('_qtd')) return;
-    let partes = chave.split(" - V");
-    if (partes.length < 2) return;
-    let item = partes[0], versao = partes[1];
-    let tipoInterno = "";
-    Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
-    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
-    let tamanho = banco[tipoInterno][item][versao].tamanho;
-    dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: estoque[chave] });
-  });
-  const wsEstoque = XLSX.utils.json_to_sheet(dadosEstoque);
-  wsEstoque['!autofilter'] = { ref: wsEstoque['!ref'] };
-  wsEstoque['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }];
-  XLSX.utils.book_append_sheet(wb, wsEstoque, "Estoque");
 
-  let dadosHistorico = historico.filter(h => {
-    if(!dataInicioP && !dataFimP) return true;
-    let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
-    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
-  }).map(h => {
-    let partes = h.item.split(" - V");
-    if (partes.length < 2) return null;
-    let item = partes[0], versao = partes[1];
-    let tipoInterno = "";
-    Object.keys(banco).forEach(tipo=>{ if(banco[tipo][item]) tipoInterno = tipo; });
-    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
-    let tamanho = banco[tipoInterno][item][versao].tamanho;
-    let ref = h.refEntradaData || '';
-    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd, Ref: ref };
-  }).filter(d => d !== null);
-  const wsHistorico = XLSX.utils.json_to_sheet(dadosHistorico);
-  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
-  XLSX.utils.book_append_sheet(wb, wsHistorico, "Histórico");
-  XLSX.writeFile(wb, "Estoque_Historico_" + getTimestamp() + ".xlsx");
-}
-
-/* ================= EXPORTAÇÃO PDF ================= */
-
-function exportarEstoquePDF(dataInicioP, dataFimP) {
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: 'landscape' });
-  const agora = new Date().toLocaleString('pt-BR');
-
-  doc.setFillColor(30, 58, 138);
-  doc.rect(0, 0, doc.internal.pageSize.width, 18, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(13);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Conferência de Estoques — Estoque', 14, 12);
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Gerado em: ' + agora, doc.internal.pageSize.width - 14, 12, { align: 'right' });
-  doc.setTextColor(0, 0, 0);
+  // ===== ABA ESTOQUE =====
 
   let dadosEstoque = [];
+  let totalGeral = 0;
+  let totalBobinasGeral = 0;
+  let totaisPorTipo = {};
+
   Object.keys(estoque).forEach(chave => {
     if (chave.endsWith('_qtd')) return;
     let partes = chave.split(" - V");
@@ -1042,30 +1151,276 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
     Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
     if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
     let tamanho = banco[tipoInterno][item][versao].tamanho;
-    dadosEstoque.push([nomeBonitoTipo(tipoInterno), item, versao, tamanho, String(estoque[chave])]);
+    let peso = estoque[chave];
+    let qtdBobinas = estoque[chave + '_qtd'] || 0;
+
+    if (qtdBobinas === 0 && peso > 0) {
+      let entradasItem = historico.filter(h => h.item === chave && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
+      let soma = 0;
+      for (let idx = entradasItem.length - 1; idx >= 0; idx--) {
+        if (soma >= peso) break;
+        soma += entradasItem[idx].qtd;
+        qtdBobinas++;
+      }
+      if (qtdBobinas === 0) qtdBobinas = 1;
+    }
+
+    let nomeT = nomeCompletoTipo(tipoInterno);
+    totalGeral += peso;
+    totalBobinasGeral += qtdBobinas;
+
+    if (!totaisPorTipo[nomeT]) totaisPorTipo[nomeT] = { kg: 0, bobinas: 0 };
+    totaisPorTipo[nomeT].kg += peso;
+    totaisPorTipo[nomeT].bobinas += qtdBobinas;
+
+    dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: peso, Bobinas: qtdBobinas });
   });
 
-  if (dadosEstoque.length === 0) { mostrarToast('Nenhum dado para exportar', 'erro'); return; }
+  let ordemTipo = { 'BRF': 1, 'Tampa': 2, '1ª Lam.': 3 };
+  dadosEstoque.sort((a, b) => (ordemTipo[a.Tipo] || 99) - (ordemTipo[b.Tipo] || 99));
 
-  doc.autoTable({
-    startY: 22,
-    head: [['Tipo', 'Item', 'Versão', 'Medidas', 'Kg']],
-    body: dadosEstoque,
-    styles: { fontSize: 9, cellPadding: 3 },
-    headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [240, 244, 255] },
-    columnStyles: {
-      0: { cellWidth: 25 },
-      1: { cellWidth: 35 },
-      2: { cellWidth: 20 },
-      3: { cellWidth: 35 },
-      4: { cellWidth: 20 }
+  let linhasEstoque = [];
+  linhasEstoque.push(['CONFERÊNCIA DE ESTOQUES', '', '', '', '', '']);
+  linhasEstoque.push(['Data do relatório:', new Date().toLocaleString('pt-BR'), '', '', '', '']);
+  linhasEstoque.push(['', '', '', '', '', '']);
+  linhasEstoque.push(['RESUMO GERAL', '', '', '', '', '']);
+  linhasEstoque.push(['Total em estoque:', '', '', '', formatarPeso(totalGeral) + ' kg', totalBobinasGeral + ' bobinas']);
+  linhasEstoque.push(['', '', '', '', '', '']);
+  linhasEstoque.push(['RESUMO POR TIPO', '', '', '', '', '']);
+  linhasEstoque.push(['Tipo', '', '', '', 'Kg', 'Bobinas']);
+
+  ['BRF', 'Tampas', '1ª Laminação'].forEach(nomeT => {
+    if (totaisPorTipo[nomeT]) {
+      let perc = totalGeral > 0 ? Math.round((totaisPorTipo[nomeT].kg / totalGeral) * 100) : 0;
+      linhasEstoque.push([nomeT, '', '', perc + '%', formatarPeso(totaisPorTipo[nomeT].kg) + ' kg', totaisPorTipo[nomeT].bobinas + ' bobinas']);
     }
   });
 
-  doc.save("Estoque_" + getTimestamp() + ".pdf");
+  linhasEstoque.push(['', '', '', '', '', '']);
+  linhasEstoque.push(['', '', '', '', '', '']);
+  linhasEstoque.push(['DETALHAMENTO', '', '', '', '', '']);
+  linhasEstoque.push(['Tipo', 'Item', 'Versão', 'Medidas', 'Kg', 'Bobinas']);
+
+  let tipoAtual = '';
+  let subtotalKg = 0;
+  let subtotalBob = 0;
+
+  dadosEstoque.forEach((d, idx) => {
+    if (tipoAtual && d.Tipo !== tipoAtual) {
+      linhasEstoque.push(['', '', '', 'Subtotal ' + tipoAtual + ':', subtotalKg + ' kg', subtotalBob + ' bobinas']);
+      linhasEstoque.push(['', '', '', '', '', '']);
+      subtotalKg = 0;
+      subtotalBob = 0;
+    }
+    tipoAtual = d.Tipo;
+    subtotalKg += d.Kg;
+    subtotalBob += d.Bobinas;
+    linhasEstoque.push([d.Tipo, d.Item, d.Versão, d.Medidas, d.Kg, d.Bobinas]);
+    if (idx === dadosEstoque.length - 1) {
+      linhasEstoque.push(['', '', '', 'Subtotal ' + tipoAtual + ':', subtotalKg + ' kg', subtotalBob + ' bobinas']);
+    }
+  });
+
+  linhasEstoque.push(['', '', '', '', '', '']);
+  linhasEstoque.push(['', '', '', 'TOTAL GERAL:', formatarPeso(totalGeral) + ' kg', totalBobinasGeral + ' bobinas']);
+
+  const wsEstoque = XLSX.utils.aoa_to_sheet(linhasEstoque);
+  wsEstoque['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
+  wsEstoque['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: 3 } },
+    { s: { r: 6, c: 0 }, e: { r: 6, c: 3 } }
+  ];
+  XLSX.utils.book_append_sheet(wb, wsEstoque, "Estoque");
+
+  // ===== ABA HISTÓRICO =====
+
+  let dadosHistorico = historico.filter(h => {
+    if (!dataInicioP && !dataFimP) return true;
+    let dataISO = h.data.split(",")[0].split("/").reverse().join("-");
+    return (!dataInicioP || dataISO >= dataInicioP) && (!dataFimP || dataISO <= dataFimP);
+  }).map(h => {
+    let partes = h.item.split(" - V");
+    if (partes.length < 2) return null;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return null;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    let ref = h.refEntradaData || '';
+    return { Data: h.data, Movimentação: h.tipo, Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: h.qtd, Ref: ref };
+  }).filter(d => d !== null);
+
+  const wsHistorico = XLSX.utils.json_to_sheet(dadosHistorico);
+  wsHistorico['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
+  XLSX.utils.book_append_sheet(wb, wsHistorico, "Histórico");
+
+  XLSX.writeFile(wb, "Estoque_Historico_" + getTimestamp() + ".xlsx");
+  mostrarToast("Exportação concluída");
 }
 
+/* ================= EXPORTAÇÃO PDF ================= */
+
+function exportarEstoquePDF(dataInicioP, dataFimP) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const agora = new Date().toLocaleString('pt-BR');
+  const pageW = doc.internal.pageSize.width;
+
+  let dadosEstoque = [];
+  let totalGeral = 0;
+  let totalBobinasGeral = 0;
+  let totaisPorTipo = {};
+
+  Object.keys(estoque).forEach(chave => {
+    if (chave.endsWith('_qtd')) return;
+    let partes = chave.split(" - V");
+    if (partes.length < 2) return;
+    let item = partes[0], versao = partes[1];
+    let tipoInterno = "";
+    Object.keys(banco).forEach(tipo => { if (banco[tipo][item]) tipoInterno = tipo; });
+    if (!banco[tipoInterno] || !banco[tipoInterno][item] || !banco[tipoInterno][item][versao]) return;
+    let tamanho = banco[tipoInterno][item][versao].tamanho;
+    let peso = estoque[chave];
+    let qtdBobinas = estoque[chave + '_qtd'] || 0;
+
+    if (qtdBobinas === 0 && peso > 0) {
+      let entradasItem = historico.filter(h => h.item === chave && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
+      let soma = 0;
+      for (let idx = entradasItem.length - 1; idx >= 0; idx--) {
+        if (soma >= peso) break;
+        soma += entradasItem[idx].qtd;
+        qtdBobinas++;
+      }
+      if (qtdBobinas === 0) qtdBobinas = 1;
+    }
+
+    let nomeT = nomeCompletoTipo(tipoInterno);
+    totalGeral += peso;
+    totalBobinasGeral += qtdBobinas;
+
+    if (!totaisPorTipo[nomeT]) totaisPorTipo[nomeT] = { kg: 0, bobinas: 0 };
+    totaisPorTipo[nomeT].kg += peso;
+    totaisPorTipo[nomeT].bobinas += qtdBobinas;
+
+    dadosEstoque.push([nomeBonitoTipo(tipoInterno), item, versao, tamanho, String(peso), String(qtdBobinas)]);
+  });
+
+  if (dadosEstoque.length === 0) { mostrarToast('Estoque vazio', 'erro'); return; }
+
+  let ordemTipo = { 'BRF': 1, 'Tampa': 2, '1ª Lam.': 3 };
+  dadosEstoque.sort((a, b) => (ordemTipo[a[0]] || 99) - (ordemTipo[b[0]] || 99));
+
+  doc.setFillColor(30, 58, 138);
+  doc.rect(0, 0, pageW, 14, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Conferência de Estoques', 14, 9);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.text(agora, pageW - 14, 9, { align: 'right' });
+
+  let resumoY = 20;
+
+  doc.setTextColor(60, 60, 60);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Total:', 14, resumoY);
+  doc.setFont('helvetica', 'normal');
+  doc.text(formatarPeso(totalGeral) + ' kg  ·  ' + totalBobinasGeral + ' bobinas', 32, resumoY);
+
+  resumoY += 5;
+  let tiposTexto = [];
+  ['BRF', 'Tampas', '1ª Laminação'].forEach(nomeT => {
+    if (totaisPorTipo[nomeT]) {
+      let perc = totalGeral > 0 ? Math.round((totaisPorTipo[nomeT].kg / totalGeral) * 100) : 0;
+      tiposTexto.push(nomeT + ': ' + formatarPeso(totaisPorTipo[nomeT].kg) + ' kg · ' + totaisPorTipo[nomeT].bobinas + ' bob. (' + perc + '%)');
+    }
+  });
+
+  doc.setFontSize(8);
+  doc.setTextColor(100, 100, 100);
+  doc.text(tiposTexto.join('    |    '), 14, resumoY);
+
+  resumoY += 3;
+  doc.setDrawColor(200, 200, 200);
+  doc.setLineWidth(0.3);
+  doc.line(14, resumoY, pageW - 14, resumoY);
+
+  let tabelaBody = [];
+  let tipoAtual2 = '';
+  let subtotalKg2 = 0;
+  let subtotalBob2 = 0;
+
+  dadosEstoque.forEach((d, idx) => {
+    if (tipoAtual2 && d[0] !== tipoAtual2) {
+      tabelaBody.push([
+        { content: '', styles: { fillColor: [245, 247, 250] } },
+        { content: '', styles: { fillColor: [245, 247, 250] } },
+        { content: '', styles: { fillColor: [245, 247, 250] } },
+        { content: 'Subtotal ' + tipoAtual2 + ':', styles: { fontStyle: 'bold', halign: 'right', fillColor: [245, 247, 250], textColor: [80, 80, 80] } },
+        { content: formatarPeso(subtotalKg2), styles: { fontStyle: 'bold', fillColor: [245, 247, 250], textColor: [80, 80, 80] } },
+        { content: String(subtotalBob2), styles: { fontStyle: 'bold', fillColor: [245, 247, 250], textColor: [80, 80, 80] } }
+      ]);
+      subtotalKg2 = 0;
+      subtotalBob2 = 0;
+    }
+
+    tipoAtual2 = d[0];
+    subtotalKg2 += parseFloat(d[4]);
+    subtotalBob2 += parseInt(d[5]);
+    tabelaBody.push(d);
+
+    if (idx === dadosEstoque.length - 1) {
+      tabelaBody.push([
+        { content: '', styles: { fillColor: [245, 247, 250] } },
+        { content: '', styles: { fillColor: [245, 247, 250] } },
+        { content: '', styles: { fillColor: [245, 247, 250] } },
+        { content: 'Subtotal ' + tipoAtual2 + ':', styles: { fontStyle: 'bold', halign: 'right', fillColor: [245, 247, 250], textColor: [80, 80, 80] } },
+        { content: formatarPeso(subtotalKg2), styles: { fontStyle: 'bold', fillColor: [245, 247, 250], textColor: [80, 80, 80] } },
+        { content: String(subtotalBob2), styles: { fontStyle: 'bold', fillColor: [245, 247, 250], textColor: [80, 80, 80] } }
+      ]);
+    }
+  });
+
+  tabelaBody.push([
+    { content: '', styles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] } },
+    { content: '', styles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] } },
+    { content: '', styles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] } },
+    { content: 'TOTAL:', styles: { fontStyle: 'bold', halign: 'right', fillColor: [30, 41, 59], textColor: [255, 255, 255] } },
+    { content: formatarPeso(totalGeral), styles: { fontStyle: 'bold', fillColor: [30, 41, 59], textColor: [255, 255, 255] } },
+    { content: String(totalBobinasGeral), styles: { fontStyle: 'bold', fillColor: [30, 41, 59], textColor: [255, 255, 255] } }
+  ]);
+
+  doc.autoTable({
+    startY: resumoY + 3,
+    head: [['Tipo', 'Item', 'Versão', 'Medidas', 'Kg', 'Bobinas']],
+    body: tabelaBody,
+    styles: { fontSize: 8, cellPadding: 2.5, textColor: [50, 50, 50] },
+    headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold', fontSize: 8 },
+    alternateRowStyles: { fillColor: [252, 252, 253] },
+    columnStyles: {
+      0: { cellWidth: 22 },
+      1: { cellWidth: 30 },
+      2: { cellWidth: 16 },
+      3: { cellWidth: 30 },
+      4: { cellWidth: 20 },
+      5: { cellWidth: 18 }
+    }
+  });
+
+  let totalPages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFontSize(7);
+    doc.setTextColor(180, 180, 180);
+    doc.text('Página ' + p + '/' + totalPages, pageW / 2, doc.internal.pageSize.height - 5, { align: 'center' });
+  }
+
+  doc.save("Estoque_" + getTimestamp() + ".pdf");
+  mostrarToast("PDF exportado com sucesso");
+}
 function exportarHistoricoPDF(dataInicioP, dataFimP) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape' });
@@ -3061,130 +3416,6 @@ function coletarBobinasParaQR(dataInicioP, dataFimP) {
   return bobinas;
 }
 
-function exportarQRCodes(dataInicioP, dataFimP) {
-  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
-
-  if (bobinas.length === 0) {
-    mostrarToast("Nenhuma bobina encontrada para gerar QR", "erro");
-    return;
-  }
-
-  // Abre modal de progresso
-  let modalHTML = `
-    <div class="modal-overlay" id="modalProgressoQR">
-      <div class="modal-content" style="text-align:center; max-width:350px;">
-        <h3 style="margin-bottom:12px;">Gerando QR Codes</h3>
-        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
-        <div class="barra" style="margin:12px 0;">
-          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
-        </div>
-        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
-      </div>
-    </div>
-  `;
-
-  let divModal = document.createElement('div');
-  divModal.innerHTML = modalHTML;
-  document.body.appendChild(divModal.firstElementChild);
-
-  setTimeout(() => {
-    gerarQRCodesEmLote(bobinas);
-  }, 100);
-}
-
-async function gerarQRCodesEmLote(bobinas) {
-  let container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.left = '-9999px';
-  container.style.top = '0';
-  document.body.appendChild(container);
-
-  let resultados = [];
-
-  for (let i = 0; i < bobinas.length; i++) {
-    let bob = bobinas[i];
-
-    // Atualiza progresso
-    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
-    let textoEl = document.getElementById('progressoQRTexto');
-    let barraEl = document.getElementById('progressoQRBarra');
-    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
-    if (barraEl) barraEl.style.width = progresso + "%";
-
-    // Cria div temporária para o QR
-    let qrDiv = document.createElement('div');
-    qrDiv.id = 'tempQR_' + i;
-    container.appendChild(qrDiv);
-
-    // Gera QR e espera a imagem ficar pronta
-    let dataUrl = await new Promise((resolve) => {
-      new QRCode(qrDiv, {
-        text: bob.qrData,
-        width: 300,
-        height: 300,
-        colorDark: "#1e293b",
-        colorLight: "#ffffff",
-        correctLevel: QRCode.CorrectLevel.M
-      });
-
-      // Aguarda canvas ou imagem ficar disponível
-      let tentativas = 0;
-      let verificar = setInterval(() => {
-        tentativas++;
-        let canvas = qrDiv.querySelector('canvas');
-        let img = qrDiv.querySelector('img');
-
-        if (canvas) {
-          clearInterval(verificar);
-          resolve(canvas.toDataURL('image/png'));
-        } else if (img && img.complete && img.naturalWidth > 0) {
-          clearInterval(verificar);
-          // Desenha a imagem num canvas para pegar dataURL
-          let c = document.createElement('canvas');
-          c.width = 300;
-          c.height = 300;
-          let ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0, 300, 300);
-          resolve(c.toDataURL('image/png'));
-        } else if (img && !img.complete) {
-          clearInterval(verificar);
-          img.onload = function() {
-            let c = document.createElement('canvas');
-            c.width = 300;
-            c.height = 300;
-            let ctx = c.getContext('2d');
-            ctx.drawImage(img, 0, 0, 300, 300);
-            resolve(c.toDataURL('image/png'));
-          };
-          img.onerror = function() {
-            resolve("");
-          };
-        } else if (tentativas > 50) {
-          clearInterval(verificar);
-          resolve("");
-        }
-      }, 50);
-    });
-
-    resultados.push({
-      ...bob,
-      dataUrl: dataUrl
-    });
-
-    // Permite atualizar a UI
-    await new Promise(r => setTimeout(r, 10));
-  }
-
-  // Remove container temporário
-  container.remove();
-
-  // Remove modal de progresso
-  let modalProgresso = document.getElementById('modalProgressoQR');
-  if (modalProgresso) modalProgresso.remove();
-
-  // Gera o arquivo
-  gerarPDFComQRCodes(resultados);
-}
 function gerarPDFComQRCodes(resultados) {
   if (resultados.length === 0) {
     mostrarToast("Nenhum QR gerado", "erro");
@@ -3195,8 +3426,6 @@ function gerarPDFComQRCodes(resultados) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
   const agora = new Date().toLocaleString('pt-BR');
-
-  // Configurações de layout - 3 colunas x 5 linhas = 15 por página
   const margem = 10;
   const cols = 3;
   const linhas = 5;
@@ -3204,7 +3433,7 @@ function gerarPDFComQRCodes(resultados) {
   const alturaUtil = 297 - (margem * 2) - 10;
   const larguraCell = larguraUtil / cols;
   const alturaCell = alturaUtil / linhas;
-  const qrSize = Math.min(larguraCell - 8, alturaCell - 22);
+  const qrSize = Math.min(larguraCell - 8, alturaCell - 18);
 
   let pagina = 0;
 
@@ -3234,39 +3463,139 @@ function gerarPDFComQRCodes(resultados) {
 
     let bob = resultados[i];
 
-    // Borda do card
     doc.setDrawColor(200, 200, 200);
     doc.setLineWidth(0.3);
     doc.roundedRect(x + 1, y + 1, larguraCell - 2, alturaCell - 2, 2, 2, 'S');
 
-    // QR Code
     if (bob.dataUrl) {
       let qrX = x + (larguraCell - qrSize) / 2;
       let qrY = y + 3;
       doc.addImage(bob.dataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
     }
 
-    // Texto abaixo do QR
     let textoY = y + qrSize + 5;
 
     doc.setFontSize(7);
     doc.setFont('helvetica', 'bold');
-    doc.text(bob.item + ' — V' + bob.versao, x + larguraCell / 2, textoY, { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+    doc.text(bob.item + '/' + bob.versao + ' — ' + bob.peso + 'kg', x + larguraCell / 2, textoY, { align: 'center' });
 
-    doc.setFontSize(6);
-    doc.setFont('helvetica', 'normal');
-    doc.text(bob.tamanho + ' | ' + bob.peso + 'kg', x + larguraCell / 2, textoY + 3.5, { align: 'center' });
-
-    // Data de produção formatada
     doc.setFontSize(5);
+    doc.setFont('helvetica', 'normal');
     doc.setTextColor(120, 120, 120);
-    doc.text(bob.dataProducao || bob.id, x + larguraCell / 2, textoY + 6.5, { align: 'center' });
+    doc.text(bob.dataProducao || '', x + larguraCell / 2, textoY + 3.5, { align: 'center' });
     doc.setTextColor(0, 0, 0);
   }
 
-  doc.save("QR_Codes_" + getTimestamp() + ".pdf");
+  doc.save("QR_A4_" + getTimestamp() + ".pdf");
   mostrarToast(resultados.length + " QR codes exportados");
-}    
+}
+
+function exportarQRCodes(dataInicioP, dataFimP) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada no período", "erro");
+    return;
+  }
+
+  let modalHTML = `
+    <div class="modal-overlay" id="modalProgressoQR">
+      <div class="modal-content" style="text-align:center; max-width:350px;">
+        <h3 style="margin-bottom:12px;">Gerando QR Codes</h3>
+        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
+        <div class="barra" style="margin:12px 0;">
+          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
+        </div>
+        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
+      </div>
+    </div>
+  `;
+
+  let divModal = document.createElement('div');
+  divModal.innerHTML = modalHTML;
+  document.body.appendChild(divModal.firstElementChild);
+
+  setTimeout(async () => {
+    let container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.left = '-9999px';
+    container.style.top = '0';
+    document.body.appendChild(container);
+
+    let resultados = [];
+
+    for (let i = 0; i < bobinas.length; i++) {
+      let bob = bobinas[i];
+
+      let progresso = Math.round(((i + 1) / bobinas.length) * 100);
+      let textoEl = document.getElementById('progressoQRTexto');
+      let barraEl = document.getElementById('progressoQRBarra');
+      if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
+      if (barraEl) barraEl.style.width = progresso + "%";
+
+      let qrDiv = document.createElement('div');
+      qrDiv.id = 'tempQR_' + i;
+      container.appendChild(qrDiv);
+
+      let dataUrl = await new Promise((resolve) => {
+        new QRCode(qrDiv, {
+          text: bob.qrData,
+          width: 300,
+          height: 300,
+          colorDark: "#000000",
+          colorLight: "#ffffff",
+          correctLevel: QRCode.CorrectLevel.M
+        });
+
+        let tentativas = 0;
+        let verificar = setInterval(() => {
+          tentativas++;
+          let canvas = qrDiv.querySelector('canvas');
+          let img = qrDiv.querySelector('img');
+
+          if (canvas) {
+            clearInterval(verificar);
+            resolve(canvas.toDataURL('image/png'));
+          } else if (img && img.complete && img.naturalWidth > 0) {
+            clearInterval(verificar);
+            let c = document.createElement('canvas');
+            c.width = 300;
+            c.height = 300;
+            let ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, 300, 300);
+            resolve(c.toDataURL('image/png'));
+          } else if (img && !img.complete) {
+            clearInterval(verificar);
+            img.onload = function() {
+              let c = document.createElement('canvas');
+              c.width = 300;
+              c.height = 300;
+              let ctx = c.getContext('2d');
+              ctx.drawImage(img, 0, 0, 300, 300);
+              resolve(c.toDataURL('image/png'));
+            };
+            img.onerror = function() { resolve(""); };
+          } else if (tentativas > 50) {
+            clearInterval(verificar);
+            resolve("");
+          }
+        }, 50);
+      });
+
+      resultados.push({ ...bob, dataUrl: dataUrl });
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    container.remove();
+
+    let modalProgresso = document.getElementById('modalProgressoQR');
+    if (modalProgresso) modalProgresso.remove();
+
+    gerarPDFComQRCodes(resultados);
+
+  }, 100);
+}  
 
 // Exportar QR codes individuais como imagens ZIP
 async function exportarQRCodesZIP(dataInicioP, dataFimP) {
@@ -3458,7 +3787,7 @@ async function gerarImagensQRIndividuais(bobinas) {
 window.exportarQRCodes = exportarQRCodes;
 window.exportarQRCodesZIP = exportarQRCodesZIP;
 
-window.ajustarFormatoQR = function() {
+window.ajustarFormatoExport = function() {
   let tipoDados = document.querySelector('input[name="tipoDados"]:checked');
   let blocoFormatoQR = document.getElementById("blocoFormatoQR");
   let blocoFormatoNormal = document.getElementById("blocoFormatoNormal");
@@ -3468,9 +3797,6 @@ window.ajustarFormatoQR = function() {
   if (tipoDados && tipoDados.value === 'qrcodes') {
     blocoFormatoQR.classList.remove('hidden');
     blocoFormatoNormal.classList.add('hidden');
-    // Seleciona PDF como padrão para QR
-    let radioPdf = blocoFormatoQR.querySelector('input[value="pdf"]');
-    if (radioPdf) radioPdf.checked = true;
   } else if (tipoDados && tipoDados.value === 'backup') {
     blocoFormatoQR.classList.add('hidden');
     blocoFormatoNormal.classList.add('hidden');
@@ -3531,3 +3857,875 @@ function interpretarQRSimplificado(texto) {
     dataBruta: dataBruta
   };
 }
+
+window.toggleQtdEtiqueta = function() {
+  let formato = document.querySelector('input[name="formatoExport"]:checked');
+  let bloco = document.getElementById("blocoQtdEtiqueta");
+  if (!bloco) return;
+  if (formato && formato.value === 'etiqueta') {
+    bloco.classList.remove('hidden');
+  } else {
+    bloco.classList.add('hidden');
+  }
+};
+
+document.addEventListener('change', function(e) {
+  if (e.target.name === 'formatoExport') {
+    let bloco = document.getElementById("blocoQtdEtiqueta");
+    if (!bloco) return;
+    if (e.target.value === 'etiqueta') {
+      bloco.classList.remove('hidden');
+    } else {
+      bloco.classList.add('hidden');
+    }
+  }
+});
+
+async function exportarQRCodesEtiqueta(dataInicioP, dataFimP, qtdPorEtiqueta) {
+  if (!qtdPorEtiqueta) qtdPorEtiqueta = 4;
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada", "erro");
+    return;
+  }
+
+  let modalHTML = `
+    <div class="modal-overlay" id="modalProgressoQR">
+      <div class="modal-content" style="text-align:center; max-width:350px;">
+        <h3 style="margin-bottom:12px;">Gerando etiquetas QR</h3>
+        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
+        <div class="barra" style="margin:12px 0;">
+          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
+        </div>
+        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
+      </div>
+    </div>
+  `;
+
+  let divModal = document.createElement('div');
+  divModal.innerHTML = modalHTML;
+  document.body.appendChild(divModal.firstElementChild);
+
+  setTimeout(async () => {
+    await gerarQRCodesEmLoteEtiqueta(bobinas, qtdPorEtiqueta);
+  }, 100);
+}
+
+async function gerarQRCodesEmLoteEtiqueta(bobinas, qtdPorEtiqueta) {
+  let container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+  document.body.appendChild(container);
+
+  let resultados = [];
+
+  for (let i = 0; i < bobinas.length; i++) {
+    let bob = bobinas[i];
+
+    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
+    let textoEl = document.getElementById('progressoQRTexto');
+    let barraEl = document.getElementById('progressoQRBarra');
+    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
+    if (barraEl) barraEl.style.width = progresso + "%";
+
+    let qrDiv = document.createElement('div');
+    qrDiv.id = 'tempQR_' + i;
+    container.appendChild(qrDiv);
+
+    let dataUrl = await new Promise((resolve) => {
+      new QRCode(qrDiv, {
+        text: bob.qrData,
+        width: 200,
+        height: 200,
+        colorDark: "#000000",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      let tentativas = 0;
+      let verificar = setInterval(() => {
+        tentativas++;
+        let canvas = qrDiv.querySelector('canvas');
+        let img = qrDiv.querySelector('img');
+
+        if (canvas) {
+          clearInterval(verificar);
+          resolve(canvas.toDataURL('image/png'));
+        } else if (img && img.complete && img.naturalWidth > 0) {
+          clearInterval(verificar);
+          let c = document.createElement('canvas');
+          c.width = 200;
+          c.height = 200;
+          let ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, 200, 200);
+          resolve(c.toDataURL('image/png'));
+        } else if (img && !img.complete) {
+          clearInterval(verificar);
+          img.onload = function() {
+            let c = document.createElement('canvas');
+            c.width = 200;
+            c.height = 200;
+            let ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, 200, 200);
+            resolve(c.toDataURL('image/png'));
+          };
+          img.onerror = function() { resolve(""); };
+        } else if (tentativas > 50) {
+          clearInterval(verificar);
+          resolve("");
+        }
+      }, 50);
+    });
+
+    resultados.push({ ...bob, dataUrl: dataUrl });
+    await new Promise(r => setTimeout(r, 10));
+  }
+
+  container.remove();
+
+  let modalProgresso = document.getElementById('modalProgressoQR');
+  if (modalProgresso) modalProgresso.remove();
+
+  gerarPDFEtiquetaCompacta(resultados, qtdPorEtiqueta);
+}
+
+function gerarPDFEtiquetaCompacta(resultados, qtdPorEtiqueta) {
+  if (resultados.length === 0) {
+    mostrarToast("Nenhum QR gerado", "erro");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+
+  const larguraPagina = 200;
+  const alturaPagina = 60;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [alturaPagina, larguraPagina] });
+
+  const margemX = 4;
+  const margemY = 3;
+  const larguraUtil = larguraPagina - (margemX * 2);
+  const alturaUtil = alturaPagina - (margemY * 2);
+
+  const larguraBloco = larguraUtil / qtdPorEtiqueta;
+  const qrSize = Math.min(20, larguraBloco - 4, alturaUtil - 12);
+
+  for (let i = 0; i < resultados.length; i++) {
+    let posNaPagina = i % qtdPorEtiqueta;
+
+    if (posNaPagina === 0 && i > 0) {
+      doc.addPage([alturaPagina, larguraPagina]);
+    }
+
+    let bob = resultados[i];
+    let x = margemX + (posNaPagina * larguraBloco);
+    let y = margemY;
+
+    let centroX = x + (larguraBloco / 2);
+
+    let qrX = centroX - (qrSize / 2);
+    let qrY = y + 2;
+
+    if (bob.dataUrl) {
+      doc.addImage(bob.dataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
+    }
+
+    // Texto abaixo do QR — linha única
+    let textoY = qrY + qrSize + 3.5;
+
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text(bob.item + '/' + bob.versao + ' — ' + bob.peso + 'kg', centroX, textoY, { align: 'center' });
+
+    // Marcas de corte entre blocos
+    if (posNaPagina > 0) {
+      let corteX = x;
+
+      doc.setDrawColor(0, 0, 0);
+      doc.setLineWidth(0.15);
+
+      let dashLen = 1.5;
+      let gapLen = 1.5;
+      let posY = 0;
+
+      while (posY < alturaPagina) {
+        let endY = Math.min(posY + dashLen, alturaPagina);
+        doc.line(corteX, posY, corteX, endY);
+        posY = endY + gapLen;
+      }
+
+      let marcaTamanho = 2;
+
+      doc.setLineWidth(0.2);
+      doc.line(corteX - marcaTamanho, 1, corteX + marcaTamanho, 1);
+      doc.line(corteX, 0, corteX, 1 + marcaTamanho);
+
+      doc.line(corteX - marcaTamanho, alturaPagina - 1, corteX + marcaTamanho, alturaPagina - 1);
+      doc.line(corteX, alturaPagina - 1 - marcaTamanho, corteX, alturaPagina);
+    }
+  }
+
+    doc.save("QR_" + qtdPorEtiqueta + "etq_" + getTimestamp() + ".pdf");
+  mostrarToast(resultados.length + " etiquetas exportadas");
+}
+
+window.exportarQRCodesEtiqueta = exportarQRCodesEtiqueta;
+window.gerarPDFEtiquetaCompacta = gerarPDFEtiquetaCompacta;
+
+/* ================= EXPORTAÇÃO ZPL (ZEBRA TLP 2844) ================= */
+
+function exportarCSVZebraMult(dataInicioP, dataFimP, qtdPorEtiqueta = 6) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada", "erro");
+    return;
+  }
+
+  let linhas = [];
+
+  // Cabeçalho: qr1, desc1, qr2, desc2...
+  let cabecalho = [];
+  for (let i = 1; i <= qtdPorEtiqueta; i++) {
+    cabecalho.push(`qr${i}`, `desc${i}`);
+  }
+  linhas.push(cabecalho.join(","));
+
+  for (let i = 0; i < bobinas.length; i += qtdPorEtiqueta) {
+    let linhaDados = [];
+
+    for (let j = 0; j < qtdPorEtiqueta; j++) {
+      let bob = bobinas[i + j];
+
+      if (bob) {
+        let descricao = `${bob.item}/${bob.versao} - ${bob.peso}kg`;
+        linhaDados.push(`"${bob.qrData}"`, `"${descricao}"`);
+      } else {
+        linhaDados.push('""', '""');
+      }
+    }
+
+    linhas.push(linhaDados.join(","));
+  }
+
+  let csv = linhas.join("\n");
+
+  let blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  let link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `Zebra_${qtdPorEtiqueta}QR_` + getTimestamp() + ".csv";
+  link.click();
+
+  mostrarToast(`CSV exportado (${qtdPorEtiqueta} QR por etiqueta)`);
+}
+
+window.exportarCSVZebra = function() {
+  exportarCSVZebraMult(null, null, 6);
+};
+
+function exportarZPLZebra(dataInicioP, dataFimP, qtdPorEtiqueta) {
+  if (!qtdPorEtiqueta) qtdPorEtiqueta = 6;
+
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast("Nenhuma bobina encontrada no período", "erro");
+    return;
+  }
+
+  let larguraEtiqueta = 610;
+  let alturaEtiqueta = 406;
+
+  let zpl = "";
+
+  for (let i = 0; i < bobinas.length; i += qtdPorEtiqueta) {
+    zpl += "^XA\n";
+    zpl += "^CI28\n";
+    zpl += "^PW" + larguraEtiqueta + "\n";
+    zpl += "^LL" + alturaEtiqueta + "\n";
+
+    let cols, qrMag, fontH, fontW;
+
+    if (qtdPorEtiqueta === 4) {
+      cols = 2;
+      qrMag = 5;
+      fontH = 20;
+      fontW = 20;
+    } else {
+      cols = 3;
+      qrMag = 4;
+      fontH = 16;
+      fontW = 16;
+    }
+
+    let linhas = Math.ceil(qtdPorEtiqueta / cols);
+    let cellW = Math.floor(larguraEtiqueta / cols);
+    let cellH = Math.floor(alturaEtiqueta / linhas);
+
+    // Tamanho real do QR na Zebra: (mag * 25) + margem interna
+    // O QR code na Zebra com ^BQN,2,mag ocupa aprox mag*25 + 2*mag pontos
+    let qrRealSize = (qrMag * 25) + (qrMag * 2);
+
+    // ===== DIVISÓRIAS =====
+
+    // Linhas verticais entre colunas
+    for (let c = 1; c < cols; c++) {
+      let x = c * cellW;
+      let dashLen = 6;
+      let gapLen = 4;
+      let posY = 0;
+
+      while (posY < alturaEtiqueta) {
+        let endY = Math.min(posY + dashLen, alturaEtiqueta);
+        zpl += "^FO" + x + "," + posY + "^GB0," + (endY - posY) + ",1^FS\n";
+        posY = endY + gapLen;
+      }
+    }
+
+    // Linhas horizontais entre linhas
+    for (let l = 1; l < linhas; l++) {
+      let y = l * cellH;
+      let dashLen = 6;
+      let gapLen = 4;
+      let posX = 0;
+
+      while (posX < larguraEtiqueta) {
+        let endX = Math.min(posX + dashLen, larguraEtiqueta);
+        zpl += "^FO" + posX + "," + y + "^GB" + (endX - posX) + ",0,1^FS\n";
+        posX = endX + gapLen;
+      }
+    }
+
+    // ===== QR CODES CENTRALIZADOS =====
+
+    for (let j = 0; j < qtdPorEtiqueta; j++) {
+      let bob = bobinas[i + j];
+      if (!bob) break;
+
+      let col = j % cols;
+      let lin = Math.floor(j / cols);
+
+      let cellX = col * cellW;
+      let cellY = lin * cellH;
+
+      // Espaço total: QR + gap + texto
+      let gap = 6;
+      let blocoAltura = qrRealSize + gap + fontH;
+
+      // Centraliza o bloco inteiro na célula
+      let blocoY = cellY + Math.floor((cellH - blocoAltura) / 2);
+      let qrX = cellX + Math.floor((cellW - qrRealSize) / 2);
+      let qrY = blocoY;
+
+      // Texto abaixo do QR, centralizado com ^FB (field block)
+      let textoY = qrY + qrRealSize + gap;
+
+      let desc = bob.item + "/" + bob.versao + " - " + bob.peso;
+
+      // QR Code centralizado
+      zpl += "^FO" + qrX + "," + qrY + "^BQN,2," + qrMag + "^FDMM," + bob.qrData + "^FS\n";
+
+      // Texto centralizado usando ^FB (field block com alinhamento central)
+      zpl += "^FO" + cellX + "," + textoY + "^A0N," + fontH + "," + fontW + "^FB" + cellW + ",1,0,C^FD" + desc + "^FS\n";
+    }
+
+    zpl += "^XZ\n\n";
+  }
+
+  let blob = new Blob([zpl], { type: "text/plain" });
+  let link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "Zebra_" + qtdPorEtiqueta + "QR_" + getTimestamp() + ".zpl";
+  link.click();
+
+  let totalEtiquetas = Math.ceil(bobinas.length / qtdPorEtiqueta);
+  mostrarToast(bobinas.length + " bobinas em " + totalEtiquetas + " etiquetas");
+}
+
+window.exportarZPLZebra = exportarZPLZebra;
+/* ================= NOVO MENU EXPORTAR ================= */
+
+let exportTipoSelecionado = 'estoque';
+let exportFormatoSelecionado = 'excel';
+let exportUsarPeriodo = false;
+
+function selecionarTipoExport(card) {
+  // Remove seleção anterior
+  document.querySelectorAll('#exportGrid .export-card').forEach(c => c.classList.remove('selecionado'));
+  card.classList.add('selecionado');
+
+  exportTipoSelecionado = card.dataset.tipo;
+
+  let formatosNormal = document.getElementById('exportFormatosNormal');
+  let formatosQR = document.getElementById('exportFormatosQR');
+  let etapaPeriodo = document.getElementById('exportEtapaPeriodo');
+
+  // Mostra formatos corretos
+  if (exportTipoSelecionado === 'qrcodes') {
+    formatosNormal.classList.add('hidden');
+    formatosQR.classList.remove('hidden');
+    exportFormatoSelecionado = 'zpl';
+    // Reset seleção formato QR
+    formatosQR.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
+    formatosQR.querySelector('[data-formato="zpl"]').classList.add('selecionado');
+  } else {
+    formatosNormal.classList.remove('hidden');
+    formatosQR.classList.add('hidden');
+    exportFormatoSelecionado = 'excel';
+    // Reset seleção formato normal
+    formatosNormal.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
+    formatosNormal.querySelector('[data-formato="excel"]').classList.add('selecionado');
+  }
+
+  // Período: mostra para histórico, ambos e qrcodes
+  if (exportTipoSelecionado === 'estoque') {
+    etapaPeriodo.classList.add('hidden');
+  } else {
+    etapaPeriodo.classList.remove('hidden');
+  }
+}
+
+function selecionarFormato(btn) {
+  let container = btn.parentElement;
+  container.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
+  btn.classList.add('selecionado');
+  exportFormatoSelecionado = btn.dataset.formato;
+}
+
+function toggleExportPeriodo(usarPeriodo, btn) {
+  exportUsarPeriodo = usarPeriodo;
+  let toggle = btn.parentElement;
+  toggle.querySelectorAll('button').forEach(b => b.classList.remove('selecionado'));
+  btn.classList.add('selecionado');
+
+  let datas = document.getElementById('exportPeriodoDatas');
+  if (usarPeriodo) {
+    datas.classList.remove('hidden');
+  } else {
+    datas.classList.add('hidden');
+  }
+}
+
+function resetarMenuExportar() {
+  exportTipoSelecionado = 'estoque';
+  exportFormatoSelecionado = 'excel';
+  exportUsarPeriodo = false;
+
+  // Reset cards
+  document.querySelectorAll('#exportGrid .export-card').forEach(c => c.classList.remove('selecionado'));
+  let primeiro = document.querySelector('#exportGrid .export-card[data-tipo="estoque"]');
+  if (primeiro) primeiro.classList.add('selecionado');
+
+  // Reset formatos
+  document.getElementById('exportFormatosNormal').classList.remove('hidden');
+  document.getElementById('exportFormatosQR').classList.add('hidden');
+  document.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
+  let excelBtn = document.querySelector('#exportFormatosNormal [data-formato="excel"]');
+  if (excelBtn) excelBtn.classList.add('selecionado');
+
+  // Reset período
+  document.getElementById('exportEtapaPeriodo').classList.add('hidden');
+  document.getElementById('exportPeriodoDatas').classList.add('hidden');
+  let toggleBtns = document.querySelectorAll('.export-periodo-toggle button');
+  toggleBtns.forEach(b => b.classList.remove('selecionado'));
+  if (toggleBtns[0]) toggleBtns[0].classList.add('selecionado');
+
+  // Limpa datas
+  let di = document.getElementById('exportDataInicio');
+  let df = document.getElementById('exportDataFim');
+  if (di) di.value = '';
+  if (df) df.value = '';
+}
+
+function executarExportacaoNova() {
+  let dataInicioExp = null;
+  let dataFimExp = null;
+
+  if (exportUsarPeriodo) {
+    dataInicioExp = document.getElementById('exportDataInicio').value;
+    dataFimExp = document.getElementById('exportDataFim').value;
+    if (!dataInicioExp && !dataFimExp) {
+      mostrarToast('Informe pelo menos uma data', 'erro');
+      return;
+    }
+  }
+
+  // Validações
+  if (exportTipoSelecionado === 'estoque') {
+    let temDados = Object.keys(estoque).some(k => !k.endsWith('_qtd'));
+    if (!temDados) {
+      mostrarToast('Estoque vazio', 'erro');
+      return;
+    }
+  }
+
+  if (exportTipoSelecionado === 'historico' || exportTipoSelecionado === 'ambos') {
+    let dadosFiltrados = historico.filter(h => {
+      if (!dataInicioExp && !dataFimExp) return true;
+      let dataISO = h.data.split(',')[0].trim().split('/').reverse().join('-');
+      return (!dataInicioExp || dataISO >= dataInicioExp) && (!dataFimExp || dataISO <= dataFimExp);
+    });
+    if (dadosFiltrados.length === 0) {
+      mostrarToast('Nenhum registro no período', 'erro');
+      return;
+    }
+  }
+
+  if (exportTipoSelecionado === 'qrcodes') {
+    let bobinas = coletarBobinasParaQR(dataInicioExp, dataFimExp);
+    if (bobinas.length === 0) {
+      mostrarToast('Nenhuma bobina encontrada', 'erro');
+      return;
+    }
+
+    if (exportFormatoSelecionado === 'zpl') {
+  abrirPreviewEtiqueta(dataInicioExp, dataFimExp);
+  fecharModalConfig();
+  return;
+} else if (exportFormatoSelecionado === 'imagens') {
+      exportarQRCodesZIP(dataInicioExp, dataFimExp);
+    } else if (exportFormatoSelecionado === 'csv') {
+      exportarCSVZebraMult(dataInicioExp, dataFimExp, 6);
+    }
+
+    fecharModalConfig();
+    return;
+  }
+
+  // Estoque, Histórico, Ambos
+  if (exportFormatoSelecionado === 'pdf') {
+    if (exportTipoSelecionado === 'estoque') exportarEstoquePDF(dataInicioExp, dataFimExp);
+    if (exportTipoSelecionado === 'historico') exportarHistoricoPDF(dataInicioExp, dataFimExp);
+    if (exportTipoSelecionado === 'ambos') {
+      exportarEstoquePDF(dataInicioExp, dataFimExp);
+      exportarHistoricoPDF(dataInicioExp, dataFimExp);
+    }
+  } else {
+    if (exportTipoSelecionado === 'estoque') exportarEstoque(dataInicioExp, dataFimExp);
+    if (exportTipoSelecionado === 'historico') exportarHistorico(dataInicioExp, dataFimExp);
+    if (exportTipoSelecionado === 'ambos') exportarAmbos(dataInicioExp, dataFimExp);
+  }
+
+  fecharModalConfig();
+}
+
+// Sobrescreve a abertura para resetar
+let _abrirConfigExportarOriginal = window.abrirConfigExportar;
+window.abrirConfigExportar = function() {
+  document.getElementById('configTitulo').textContent = 'Exportar dados';
+  document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaExportar').classList.remove('hidden');
+  resetarMenuExportar();
+};
+
+window.selecionarTipoExport = selecionarTipoExport;
+window.selecionarFormato = selecionarFormato;
+window.toggleExportPeriodo = toggleExportPeriodo;
+window.executarExportacaoNova = executarExportacaoNova;
+
+/* ================= PREVIEW ETIQUETA ZPL ================= */
+
+let previewDados = {
+  bobinas: [],
+  paginaAtual: 0,
+  totalPaginas: 0,
+  qrPorEtiqueta: 6,
+  dataInicio: null,
+  dataFim: null
+};
+
+function abrirPreviewEtiqueta(dataInicioP, dataFimP) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+
+  if (bobinas.length === 0) {
+    mostrarToast('Nenhuma bobina encontrada', 'erro');
+    return;
+  }
+
+  previewDados.bobinas = bobinas;
+  previewDados.paginaAtual = 0;
+  previewDados.totalPaginas = Math.ceil(bobinas.length / previewDados.qrPorEtiqueta);
+  previewDados.dataInicio = dataInicioP;
+  previewDados.dataFim = dataFimP;
+  document.getElementById('previewInfo').textContent =
+    '76.2 × 50.8 mm — ' + bobinas.length + ' bobina(s) em ' + previewDados.totalPaginas + ' etiqueta(s)';
+
+  document.getElementById('modalPreviewEtiqueta').classList.remove('hidden');
+
+  gerarPreviewsQR(function() {
+    desenharPreviewPagina(0);
+  });
+}
+
+function fecharPreviewEtiqueta() {
+  document.getElementById('modalPreviewEtiqueta').classList.add('hidden');
+  previewDados.bobinas = [];
+}
+
+function previewPaginaAnterior() {
+  if (previewDados.paginaAtual > 0) {
+    previewDados.paginaAtual--;
+    desenharPreviewPagina(previewDados.paginaAtual);
+  }
+}
+
+function previewProximaPagina() {
+  if (previewDados.paginaAtual < previewDados.totalPaginas - 1) {
+    previewDados.paginaAtual++;
+    desenharPreviewPagina(previewDados.paginaAtual);
+  }
+}
+
+function gerarPreviewsQR(callback) {
+  let container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+  document.body.appendChild(container);
+
+  let pendentes = previewDados.bobinas.length;
+
+  if (pendentes === 0) {
+    container.remove();
+    if (callback) callback();
+    return;
+  }
+
+  previewDados.bobinas.forEach(function(bob, i) {
+    let qrDiv = document.createElement('div');
+    qrDiv.id = 'prevQR_' + i;
+    container.appendChild(qrDiv);
+
+    new QRCode(qrDiv, {
+      text: bob.qrData,
+      width: 200,
+      height: 200,
+      colorDark: '#000000',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+
+    let tentativas = 0;
+    let verificar = setInterval(function() {
+      tentativas++;
+      let canvas = qrDiv.querySelector('canvas');
+      let img = qrDiv.querySelector('img');
+
+      let resolvido = false;
+
+      if (canvas) {
+        bob._qrDataUrl = canvas.toDataURL('image/png');
+        resolvido = true;
+      } else if (img && img.complete && img.naturalWidth > 0) {
+        let c = document.createElement('canvas');
+        c.width = 200; c.height = 200;
+        let ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, 200, 200);
+        bob._qrDataUrl = c.toDataURL('image/png');
+        resolvido = true;
+      } else if (img && !img.complete) {
+        clearInterval(verificar);
+        img.onload = function() {
+          let c = document.createElement('canvas');
+          c.width = 200; c.height = 200;
+          let ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, 200, 200);
+          bob._qrDataUrl = c.toDataURL('image/png');
+          pendentes--;
+          if (pendentes <= 0) { container.remove(); if (callback) callback(); }
+        };
+        img.onerror = function() {
+          bob._qrDataUrl = '';
+          pendentes--;
+          if (pendentes <= 0) { container.remove(); if (callback) callback(); }
+        };
+        return;
+      } else if (tentativas > 50) {
+        bob._qrDataUrl = '';
+        resolvido = true;
+      }
+
+      if (resolvido) {
+        clearInterval(verificar);
+        pendentes--;
+        if (pendentes <= 0) { container.remove(); if (callback) callback(); }
+      }
+    }, 50);
+  });
+}
+
+function desenharPreviewPagina(pagina) {
+  let canvas = document.getElementById('previewCanvas');
+  let ctx = canvas.getContext('2d');
+
+  let W = 610;
+  let H = 406;
+  canvas.width = W;
+  canvas.height = H;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, W - 2, H - 2);
+
+  let inicio = pagina * previewDados.qrPorEtiqueta;
+  let qtd = previewDados.qrPorEtiqueta;
+  let cols, qrMag, fontH;
+
+  if (qtd === 4) {
+    cols = 2;
+    qrMag = 5;
+    fontH = 20;
+  } else {
+    cols = 3;
+    qrMag = 4;
+    fontH = 16;
+  }
+
+  let linhas = Math.ceil(qtd / cols);
+  let cellW = Math.floor(W / cols);
+  let cellH = Math.floor(H / linhas);
+  let qrRealSize = (qrMag * 25) + (qrMag * 2);
+
+  // ===== DIVISÓRIAS =====
+
+  for (let c = 1; c < cols; c++) {
+    let x = c * cellW;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+
+  for (let l = 1; l < linhas; l++) {
+    let y = l * cellH;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([]);
+
+  // ===== QR CODES CENTRALIZADOS =====
+
+  let imagensParaDesenhar = [];
+
+  for (let j = 0; j < qtd; j++) {
+    let bob = previewDados.bobinas[inicio + j];
+    if (!bob) break;
+
+    let col = j % cols;
+    let lin = Math.floor(j / cols);
+
+    let cellX = col * cellW;
+    let cellY = lin * cellH;
+
+    let gap = 6;
+    let blocoAltura = qrRealSize + gap + fontH;
+    let blocoY = cellY + Math.floor((cellH - blocoAltura) / 2);
+    let qrX = cellX + Math.floor((cellW - qrRealSize) / 2);
+    let qrY = blocoY;
+
+    let textoY = qrY + qrRealSize + gap + fontH;
+    let desc = bob.item + '/' + bob.versao + ' - ' + bob.peso;
+
+    // Texto centralizado
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold ' + fontH + 'px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(desc, cellX + cellW / 2, textoY);
+
+    if (bob._qrDataUrl) {
+      imagensParaDesenhar.push({
+        src: bob._qrDataUrl,
+        x: qrX,
+        y: qrY,
+        size: qrRealSize
+      });
+    } else {
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(qrX, qrY, qrRealSize, qrRealSize);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('QR', qrX + qrRealSize / 2, qrY + qrRealSize / 2 + 4);
+    }
+  }
+
+  // Info nos cantos
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '10px Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText('76.2 x 50.8 mm', 6, H - 6);
+  ctx.textAlign = 'right';
+  ctx.fillText('203 DPI', W - 6, H - 6);
+  ctx.textAlign = 'left';
+
+  // Desenha QR codes
+  let pendentes = imagensParaDesenhar.length;
+
+  if (pendentes === 0) {
+    atualizarNavPreview();
+    return;
+  }
+
+  imagensParaDesenhar.forEach(function(item) {
+    let img = new Image();
+    img.onload = function() {
+      ctx.drawImage(img, item.x, item.y, item.size, item.size);
+      pendentes--;
+      if (pendentes <= 0) atualizarNavPreview();
+    };
+    img.onerror = function() {
+      pendentes--;
+      if (pendentes <= 0) atualizarNavPreview();
+    };
+    img.src = item.src;
+  });
+}
+function atualizarNavPreview() {
+  let paginaLabel = document.getElementById('previewPagina');
+  paginaLabel.textContent = (previewDados.paginaAtual + 1) + ' / ' + previewDados.totalPaginas;
+
+  let btns = document.querySelectorAll('.preview-etiqueta-nav button');
+  if (btns[0]) btns[0].disabled = (previewDados.paginaAtual <= 0);
+  if (btns[1]) btns[1].disabled = (previewDados.paginaAtual >= previewDados.totalPaginas - 1);
+}
+
+function confirmarExportZPL() {
+  fecharPreviewEtiqueta();
+  exportarZPLZebra(previewDados.dataInicio, previewDados.dataFim);
+}
+
+window.abrirPreviewEtiqueta = abrirPreviewEtiqueta;
+window.fecharPreviewEtiqueta = fecharPreviewEtiqueta;
+window.previewPaginaAnterior = previewPaginaAnterior;
+window.previewProximaPagina = previewProximaPagina;
+window.confirmarExportZPL = confirmarExportZPL;
+window.abrirPreviewEtiqueta = abrirPreviewEtiqueta;
+window.fecharPreviewEtiqueta = fecharPreviewEtiqueta;
+window.previewPaginaAnterior = previewPaginaAnterior;
+window.previewProximaPagina = previewProximaPagina;
+window.confirmarExportZPL = confirmarExportZPL;
+window.selecionarTipoExport = selecionarTipoExport;
+window.selecionarFormato = selecionarFormato;
+window.toggleExportPeriodo = toggleExportPeriodo;
+window.executarExportacaoNova = executarExportacaoNova;
+window.exportarZPLZebra = exportarZPLZebra;
+window.exportarQRCodesZIP = exportarQRCodesZIP;
+window.exportarCSVZebra = function() { exportarCSVZebraMult(null, null, 6); };
+window.ajustarFormatoExport = ajustarFormatoExport;
+window.exportarQRCodesEtiqueta = exportarQRCodesEtiqueta;
+window.gerarPDFEtiquetaCompacta = gerarPDFEtiquetaCompacta;
