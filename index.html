@@ -10,6 +10,7 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
@@ -19,9 +20,11 @@
 <body>
 
 <div class="top-header">
-  <button id="btnDesfazer" class="btn-icon btn-undo" onclick="desfazerAcao()" title="Desfazer">↩</button>
-  <h1 class="titulo-conferencia">Conferência de estoques</h1>
-  <button id="btnRefazer" class="btn-icon btn-redo" onclick="refazerAcao()" title="Refazer">↪</button>
+  <button id="btnDesfazer" class="btn-icon btn-undo" onclick="desfazerAcao()" title="Desfazer">↶</button>
+  <h1 class="titulo-conferencia">Conferência</h1>
+  <button id="btnRefazer" class="btn-icon btn-redo" onclick="refazerAcao()" title="Refazer">↷</button>
+
+  <!-- Seus outros botões do cabeçalho continuam aqui... -->
   <div class="header-buttons">
     <button id="btnConfig" class="btn-icon" onclick="abrirModalConfig()">⚙️</button>
     <button id="btnExpandir" class="btn-icon" onclick="alternarModoVisualizacao()">⛶</button>
@@ -268,13 +271,24 @@
     </div>
 
     <!-- MENU PRINCIPAL -->
-    <div id="configMenuPrincipal">
-      <button class="btn-opcao btn-editar-opcao" onclick="abrirConfigExportar()">📥 Exportar dados</button>
-      <button class="btn-opcao btn-editar-opcao" onclick="abrirConfigBackup()">💾 Backup / Restaurar</button>
-      <button class="btn-opcao btn-editar-opcao" onclick="abrirConfigCadastro()">🗂️ Gerenciar cadastro</button>
-      <button class="btn-opcao btn-editar-opcao" onclick="alternarModoEscuro()">🌓 Modo escuro</button>
-      <button class="btn-opcao btn-cancelar-opcao" onclick="fecharModalConfig()">Fechar</button>
-    </div>
+<div id="configMenuPrincipal">
+  <button class="btn-opcao btn-editar-opcao" onclick="abrirConfigExportar()">📥 Exportar dados</button>
+  <button class="btn-opcao btn-editar-opcao" onclick="abrirConfigBackup()">💾 Backup / Restaurar</button>
+  <button class="btn-opcao btn-editar-opcao" onclick="abrirConfigCadastro()">🗂️ Gerenciar cadastro</button>
+
+<div class="btn-opcao dark-switch-row" onclick="alternarModoEscuro()">
+  <div class="dark-switch-label">
+    <span id="darkModeIcon">🌙</span>
+    Modo escuro
+  </div>
+  <label class="switch" onclick="event.stopPropagation()">
+    <input type="checkbox" id="darkModeToggle" onchange="alternarModoEscuro()">
+    <span class="switch-slider"></span>
+  </label>
+</div>
+
+  <button class="btn-opcao btn-cancelar-opcao" onclick="fecharModalConfig()">Fechar</button>
+</div>
 
 <!-- SUBTELA EXPORTAR -->
 <div id="configTelaExportar" class="hidden">
@@ -356,6 +370,7 @@
       </p>
       <button type="button" class="btn-modal btn-confirmar" onclick="exportarBackup()">📥 Baixar backup (.json)</button>
       <button type="button" class="btn-modal btn-importar" onclick="importarBackup()">📂 Restaurar backup</button>
+<button class="btn-opcao btn-restaurar-local" onclick="restaurarUltimoBackup()">↩ Restaurar último backup</button>
       <input type="file" id="inputBackup" accept=".json" style="display:none" onchange="processarBackup(event)">
       <button class="btn-opcao btn-cancelar-opcao" onclick="voltarConfigPrincipal()">← Voltar</button>
     </div>
