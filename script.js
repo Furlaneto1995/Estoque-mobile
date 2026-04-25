@@ -198,8 +198,15 @@ function carregarDados() {
 
   // Modo escuro persistente
   if (localStorage.getItem('modoEscuro') === 'true') {
-    document.body.classList.add('dark-mode');
-  }
+  document.body.classList.add('dark-mode');
+
+  // Sincroniza o toggle e ícone ao carregar
+  let toggle = document.getElementById('darkModeToggle');
+  if (toggle) toggle.checked = true;
+
+  let icone = document.getElementById('darkModeIcon');
+  if (icone) icone.textContent = '☀️';
+}
 
   salvarDados();
   atualizarTabela();
@@ -1501,6 +1508,7 @@ if ('serviceWorker' in navigator && (location.protocol === 'http:' || location.p
 
 let tipoDetalheAtual = null;
 let ordemDetalhes = { coluna: null, asc: true };
+let destaqueBobinaDetalhe = null;
 
 function ordenarDetalhes(coluna) {
   if (ordemDetalhes.coluna === coluna) { ordemDetalhes.asc = !ordemDetalhes.asc; }
@@ -1515,28 +1523,161 @@ function ordenarDetalhes(coluna) {
 
 function abrirDetalhes(tipo) {
   tipoDetalheAtual = tipo;
+
+  document.getElementById('movimentar').classList.add('hidden');
   document.getElementById('estoque').classList.add('hidden');
+  document.getElementById('historico').classList.add('hidden');
   document.getElementById('detalhesTipo').classList.remove('hidden');
+
+  document.querySelectorAll('.nav-top button').forEach(btn => btn.classList.remove('ativo'));
+
+  const btnExpandir = document.getElementById("btnExpandir");
+  if (btnExpandir) {
+    btnExpandir.style.visibility = "visible";
+    btnExpandir.style.pointerEvents = "auto";
+  }
+
   document.getElementById('detalheTitulo').textContent = nomeCompletoTipo(tipo);
   document.getElementById('buscaDetalhes').value = '';
   ordemDetalhes = { coluna: null, asc: true };
+
   document.querySelectorAll('#detalhesTipo thead th.sortable').forEach(th => {
-    th.classList.remove('asc', 'desc', 'none'); th.classList.add('none');
+    th.classList.remove('asc', 'desc', 'none');
+    th.classList.add('none');
   });
+
   atualizarDetalhes();
 }
 
 function fecharDetalhes() {
   tipoDetalheAtual = null;
+  destaqueBobinaDetalhe = null;
   document.getElementById('detalhesTipo').classList.add('hidden');
   document.getElementById('estoque').classList.remove('hidden');
   atualizarTabela();
 }
 
+
+function irParaBobinaNosDetalhes(registro, indexHistorico) {
+  if (!registro || !registro.item || !registro.item.includes(" - V")) return;
+
+  let partes = registro.item.split(" - V");
+  let item = partes[0];
+  let versao = partes[1];
+  let tipo = descobrirTipoPorItem(item);
+
+  if (!tipo) {
+    mostrarToast('Tipo da bobina não encontrado', 'erro');
+    return;
+  }
+
+  let tamanho = '';
+  if (banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
+    tamanho = banco[tipo][item][versao].tamanho || '';
+  }
+
+  destaqueBobinaDetalhe = {
+    item: registro.item,
+    indexHistorico: indexHistorico
+  };
+
+  abrirDetalhes(tipo);
+
+  let campoBusca = document.getElementById('buscaDetalhes');
+  if (campoBusca) {
+    campoBusca.value = [
+      nomeCompletoTipo(tipo),
+      item,
+      versao,
+      tamanho,
+      registro.data || ''
+    ].filter(Boolean).join(' ');
+  }
+
+  atualizarDetalhes();
+
+  setTimeout(function() {
+    localizarBobinaNosDetalhes();
+  }, 80);
+}
+function abrirGrupoDetalhePorId(idGrupo) {
+  let linhas = document.querySelectorAll(`tr[data-grupo="${idGrupo}"]`);
+  let principal = document.getElementById("principal-" + idGrupo);
+  if (!principal) return;
+  principal.classList.add('grupo-aberto');
+  let btn = principal.querySelector('.btn-expandir-detalhe');
+  if (btn) btn.textContent = "−";
+  linhas.forEach(l => l.classList.remove('hidden'));
+}
+
+function localizarBobinaNosDetalhes() {
+  if (!destaqueBobinaDetalhe) return;
+  let partes = destaqueBobinaDetalhe.itemCompleto.split(" - V");
+  let item = partes[0], versao = partes[1];
+  let idGrupo = "gp" + item.replace(/[^a-zA-Z0-9]/g, '') + versao.replace(/[^a-zA-Z0-9]/g, '');
+  abrirGrupoDetalhePorId(idGrupo);
+  let linha = document.querySelector(`#detalhesTabela tr[data-index-historico="${destaqueBobinaDetalhe.indexHistorico}"]`);
+  if (linha) {
+    linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    linha.style.backgroundColor = '#fef3c7';
+    linha.style.outline = '2px solid #2563eb';
+    linha.style.outlineOffset = '-2px';
+    setTimeout(() => { linha.style.backgroundColor = ''; linha.style.outline = ''; linha.style.outlineOffset = ''; }, 4000);
+  }
+  destaqueBobinaDetalhe = null;
+}
+
+function irParaBobinaNosDetalhes(registro, indexHistorico) {
+  if (!registro || !registro.item) return;
+
+  // 1. Descobre o tipo (BRF, Tampas, etc)
+  let itemApenas = registro.item.split(" - ")[0].trim();
+  let tipo = descobrirTipoPorItem(itemApenas);
+
+  if (!tipo) {
+    mostrarToast('Tipo não encontrado', 'erro');
+    return;
+  }
+
+  // 2. Reconstrói a "Digital" (ID) da bobina alvo
+  let digitalData = registro.data.replace(/[^0-9]/g, "");
+  let idAlvo = "BOBINA-" + indexHistorico + "-" + digitalData;
+
+  // 3. Abre a tela de detalhes do tipo
+  abrirDetalhes(tipo);
+
+  // 4. Limpa a busca para a bobina estar visível no código
+  let campoBusca = document.getElementById('buscaDetalhes');
+  if (campoBusca) campoBusca.value = ""; 
+  atualizarDetalhes();
+
+  // 5. Localiza e destaca
+  setTimeout(() => {
+    // Abre o grupo "+"
+    let partes = registro.item.split(" - V");
+    let idGrupo = "gp" + partes[0].replace(/[^a-zA-Z0-9]/g, '') + partes[1].replace(/[^a-zA-Z0-9]/g, '');
+    abrirGrupoDetalhePorId(idGrupo);
+
+    // Rola e destaca
+    let linha = document.getElementById(idAlvo);
+    if (linha) {
+      linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      linha.style.backgroundColor = '#fef3c7'; // Amarelo
+      linha.style.outline = '3px solid #1e3a8a'; // Borda azul forte
+      
+      setTimeout(() => { 
+        linha.style.backgroundColor = ''; 
+        linha.style.outline = '';
+      }, 5000);
+    } else {
+        mostrarToast("Bobina localizada, mas o filtro a escondeu", "erro");
+    }
+  }, 350);
+}
 function atualizarDetalhes() {
   const tbody = document.getElementById('detalhesTabela');
   tbody.innerHTML = '';
-  const termo = document.getElementById('buscaDetalhes').value.toLowerCase();
+const termo = normalizarTexto(document.getElementById('buscaDetalhes').value);
   let pesoTotalAcumulado = 0, totalBobinas = 0;
 
   let entradas = historico.filter(h => {
@@ -1587,14 +1728,38 @@ function atualizarDetalhes() {
   });
 
   let chavesOrdenadas = Object.keys(agrupado).filter(chave => {
-    let partes = chave.split(" - V");
-    let item = partes[0], versao = partes[1];
-    let tamanho = "";
-    if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][item] && banco[tipoDetalheAtual][item][versao]) {
-      tamanho = banco[tipoDetalheAtual][item][versao].tamanho;
-    }
-    return (`${item} ${versao} ${tamanho} ${agrupado[chave].total} ${agrupado[chave].registros.length}`.toLowerCase().includes(termo));
-  });
+  let partes = chave.split(" - V");
+  let item = partes[0];
+  let versao = partes[1];
+  let tamanho = "";
+
+  if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][item] && banco[tipoDetalheAtual][item][versao]) {
+    tamanho = banco[tipoDetalheAtual][item][versao].tamanho;
+  }
+
+  let textoRegistros = agrupado[chave].registros.map(reg =>
+    [
+      reg.data || '',
+      reg.id || '',
+      reg.qtd || '',
+      reg.tipo || ''
+    ].join(' ')
+  ).join(' ');
+
+  let textoBusca = normalizarTexto([
+    tipoDetalheAtual,
+    nomeCompletoTipo(tipoDetalheAtual),
+    nomeBonitoTipo(tipoDetalheAtual),
+    item,
+    versao,
+    tamanho,
+    agrupado[chave].total,
+    agrupado[chave].registros.length,
+    textoRegistros
+  ].join(' '));
+
+  return textoBusca.includes(termo);
+});
 
   if (ordemDetalhes.coluna) {
     chavesOrdenadas.sort((a, b) => {
@@ -1652,6 +1817,11 @@ function atualizarDetalhes() {
         let trReg = document.createElement('tr');
         trReg.className = "detalhe-registro hidden" + (reg.consumida ? " bobina-consumida" : "");
         trReg.setAttribute('data-grupo', idLimpo);
+        
+        // GERA A DIGITAL ÚNICA (ID): Index + Data e Hora (apenas números)
+        let digitalData = reg.data.replace(/[^0-9]/g, "");
+        trReg.id = "BOBINA-" + indexReal + "-" + digitalData; 
+
         trReg.innerHTML = `
           <td style="text-align:center;width:2ch;"><strong>${idx+1}</strong></td>
           <td colspan="2" style="text-align:center;font-size:11px;">${reg.data}</td>
@@ -1692,13 +1862,73 @@ function toggleGrupo(id) {
 
 /* ================= BACKUP ================= */
 
+function salvarUltimoBackupLocal(origem = 'manual') {
+  const dados = {
+    estoque: JSON.parse(JSON.stringify(estoque)),
+    historico: JSON.parse(JSON.stringify(historico)),
+    banco: JSON.parse(JSON.stringify(banco)),
+    dataBackup: new Date().toLocaleString(),
+    origem: origem
+  };
+
+  localStorage.setItem('ultimoBackupLocal', JSON.stringify(dados));
+}
+
+window.restaurarUltimoBackup = function() {
+  const salvo = localStorage.getItem('ultimoBackupLocal');
+
+  if (!salvo) {
+    mostrarToast('Nenhum backup local disponível', 'erro');
+    return;
+  }
+
+  try {
+    const dados = JSON.parse(salvo);
+
+    if (!dados.estoque || !dados.historico || !dados.banco) {
+      mostrarToast('Backup local inválido', 'erro');
+      return;
+    }
+
+    if (!confirm(
+      "Restaurar o último backup salvo em " + (dados.dataBackup || "data desconhecida") + "?\n\n" +
+      "Isso substituirá os dados atuais."
+    )) return;
+
+    salvarEstadoParaDesfazer();
+
+    estoque = dados.estoque;
+    historico = dados.historico;
+    banco = dados.banco;
+
+    salvarBanco();
+    salvarDados();
+    atualizarTudo();
+    fecharModalConfig();
+
+    mostrarToast('Último backup restaurado');
+  } catch (e) {
+    mostrarToast('Erro ao restaurar último backup', 'erro');
+  }
+};
+
 function exportarBackup() {
-  const dados = { estoque, historico, banco, dataBackup: new Date().toLocaleString() };
+  salvarUltimoBackupLocal('backup exportado manualmente');
+
+  const dados = {
+    estoque,
+    historico,
+    banco,
+    dataBackup: new Date().toLocaleString()
+  };
+
   const blob = new Blob([JSON.stringify(dados, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = "backup_estoque_" + getTimestamp() + ".json";
   link.click();
+
+  mostrarToast('Backup exportado');
 }
 
 function importarBackup() { document.getElementById('inputBackup').click(); }
@@ -1715,6 +1945,8 @@ function processarBackup(event) {
         return;
       }
       if (!confirm("Isso vai substituir TODOS os dados atuais pelo backup.\n\nData do backup: " + (dados.dataBackup || "desconhecida") + "\n\nDeseja continuar?")) return;
+            salvarUltimoBackupLocal('antes de restaurar backup importado');
+
       estoque = dados.estoque;
       historico = dados.historico;
       if (dados.banco) {
@@ -2206,10 +2438,14 @@ document.addEventListener("DOMContentLoaded", function() {
 window.removerHistorico = function(i){
   let registro = historico[i];
   if (!registro) return;
+
   if (registro.tipo === "Entrada" && !registro.consumida && !registro._removidaEstoque && estoque[registro.item] && estoque[registro.item] > 0) {
-    mostrarToast('Não é possível excluir uma entrada ativa no estoque', 'erro');
+    if (confirm("❌ Não é permitido excluir uma entrada ativa no estoque.\n\nDeseja localizar esta bobina nos detalhes do tipo?")) {
+      irParaBobinaNosDetalhes(registro, i);
+    }
     return;
   }
+
   if(!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
   salvarEstadoParaDesfazer();
   historico.splice(i, 1);
@@ -2251,7 +2487,16 @@ window.abrirConfigBackup = function() {
 
 window.alternarModoEscuro = function() {
   document.body.classList.toggle('dark-mode');
-  localStorage.setItem('modoEscuro', document.body.classList.contains('dark-mode'));
+  let ativo = document.body.classList.contains('dark-mode');
+  localStorage.setItem('modoEscuro', ativo);
+
+  // Atualiza o toggle
+  let toggle = document.getElementById('darkModeToggle');
+  if (toggle) toggle.checked = ativo;
+
+  // Atualiza o ícone
+  let icone = document.getElementById('darkModeIcon');
+  if (icone) icone.textContent = ativo ? '☀️' : '🌙';
 };
 
 /* ================= SISTEMA DE DESFAZER / REFAZER ================= */
@@ -2814,10 +3059,46 @@ function localizarRegistroPorQR(dados) {
 function mostrarResultadoQR(dados, registro) {
   qrLidoAtual = { dados, registro };
 
+  // 1. Descobre o tipo e verifica se existe no cadastro
+  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+  let itemExiste = tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)];
+
+  // 2. Extrai a data de produção do QR
+  let etiquetaData = "-";
+  if (dados.id && dados.id.includes("/")) {
+    let partesId = dados.id.split("/");
+    if (partesId.length >= 5) {
+      let d = partesId[3];
+      let h = partesId[4];
+      if (h.length === 4) h = h + "00";
+      if (d.length === 8 && h.length === 6) {
+        etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
+          " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+      }
+    }
+  }
+  if (etiquetaData === "-" && dados.dataBruta) {
+    let d = dados.dataBruta.split("/")[0];
+    let h = dados.dataBruta.split("/")[1];
+    if (h && h.length === 4) h = h + "00";
+    if (d && d.length === 8 && h && h.length === 6) {
+      etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
+        " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+    }
+  }
+
+  // 3. Define o Status (agora verificando o cadastro primeiro)
   let status = "";
   let statusTipo = "";
 
-  if (registro) {
+  if (!itemExiste) {
+    // ERRO: Item ou versão não existe no banco de dados
+    status = `<div style="margin-top:8px; color:#dc2626;"><strong>❌ Erro:</strong> Item ou versão não cadastrado</div>
+              <div style="margin-top:4px; padding:6px 10px; background:#fee2e2; border-radius:6px; color:#991b1b; font-size:13px; font-weight:600;">
+                ⚠️ Cadastre este item em "Gerenciar cadastro" antes de movimentá-lo.
+              </div>`;
+    statusTipo = "erro_cadastro";
+  } else if (registro) {
     if (registro._removidaEstoque) {
       status = `<div style="margin-top:8px; color:#dc2626;"><strong>⚠️ Status:</strong> excluída do estoque</div>`;
       statusTipo = "excluida";
@@ -2836,61 +3117,33 @@ function mostrarResultadoQR(dados, registro) {
     statusTipo = "nova";
   }
 
- // Extrai a parte da data/hora bruta do QR (ddmmaaaa/hhmmss)
-// Extrai a data de produção do QR
-  let etiquetaData = "-";
-  
-  // Tenta pegar do id (formato simplificado completo)
-  if (dados.id && dados.id.includes("/")) {
-    let partesId = dados.id.split("/");
-    if (partesId.length >= 5) {
-      let d = partesId[3];
-      let h = partesId[4];
-      if (h.length === 4) h = h + "00";
-      if (d.length === 8 && h.length === 6) {
-        etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
-          " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
-      }
-    }
-  }
-  
-  // Fallback: tenta da dataBruta
-  if (etiquetaData === "-" && dados.dataBruta) {
-    let d = dados.dataBruta.split("/")[0];
-    let h = dados.dataBruta.split("/")[1];
-    if (h && h.length === 4) h = h + "00";
-    if (d && d.length === 8 && h && h.length === 6) {
-      etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
-        " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
-    }
-  }
-
+  // 4. Monta o HTML na nova ordem solicitada
   let html = `
+    <div><strong>Tipo:</strong> ${tipo ? nomeCompletoTipo(tipo) : '<span style="color:#dc2626">Desconhecido</span>'}</div>
     <div><strong>Item:</strong> ${dados.item || '-'}</div>
     <div><strong>Versão:</strong> ${dados.versao || '-'}</div>
     <div><strong>Peso:</strong> ${dados.peso || '-'} kg</div>
-    <div><strong>Tipo:</strong> ${dados.tipo ? nomeCompletoTipo(dados.tipo) : '-'}</div>
     <div><strong>Data de Produção:</strong> ${etiquetaData}</div>
     ${status}
   `;
 
   document.getElementById("resultadoQRConteudo").innerHTML = html;
 
-  let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
-  let itemExiste = tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)];
-
+  // 5. Exibe os botões baseados no status
   let btnUsar = document.getElementById("btnUsarQRMov");
   let btnEntradaRapida = document.getElementById("btnEntradaRapidaQR");
   let btnConsumir = document.getElementById("btnConsumirQR");
   let btnDesmarcar = document.getElementById("btnDesmarcarQR");
   let btnExcluir = document.getElementById("btnExcluirQR");
 
+  // Esconde todos inicialmente
   if (btnUsar) btnUsar.style.display = "none";
   if (btnEntradaRapida) btnEntradaRapida.style.display = "none";
   if (btnConsumir) btnConsumir.style.display = "none";
   if (btnDesmarcar) btnDesmarcar.style.display = "none";
   if (btnExcluir) btnExcluir.style.display = "none";
 
+  // Só mostra botões se o item existir
   if (itemExiste) {
     if (statusTipo === "nova") {
       if (btnUsar) btnUsar.style.display = "block";
@@ -3631,159 +3884,100 @@ async function exportarQRCodesZIP(dataInicioP, dataFimP) {
 
 async function gerarImagensQRIndividuais(bobinas) {
   let container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.left = '-9999px';
-  container.style.top = '0';
+  container.style.position = 'fixed'; container.style.left = '-9999px'; container.style.top = '0';
   document.body.appendChild(container);
 
   let arquivos = [];
+  const total = bobinas.length;
 
-  for (let i = 0; i < bobinas.length; i++) {
+  for (let i = 0; i < total; i++) {
     let bob = bobinas[i];
+    let progresso = Math.round(((i + 1) / total) * 100);
+    document.getElementById('progressoQRTexto').textContent = (i + 1) + " / " + total;
+    document.getElementById('progressoQRBarra').style.width = progresso + "%";
 
-    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
-    let textoEl = document.getElementById('progressoQRTexto');
-    let barraEl = document.getElementById('progressoQRBarra');
-    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
-    if (barraEl) barraEl.style.width = progresso + "%";
-
-    // Gera QR em div temporária
+    // Criar um novo div limpo para cada QR para evitar conflito
     let qrDiv = document.createElement('div');
-    qrDiv.id = 'tempQR_' + i;
     container.appendChild(qrDiv);
 
-    // Aguarda QR ficar pronto
+    // Gerar o QR e esperar a conclusão real
     let qrDataUrl = await new Promise((resolve) => {
-      new QRCode(qrDiv, {
-        text: bob.qrData,
-        width: 300,
-        height: 300,
-        colorDark: "#1e293b",
-        colorLight: "#ffffff",
-        correctLevel: QRCode.CorrectLevel.M
+      new QRCode(qrDiv, { 
+        text: bob.qrData, 
+        width: 300, 
+        height: 300, 
+        correctLevel: QRCode.CorrectLevel.M 
       });
 
-      let tentativas = 0;
-      let verificar = setInterval(() => {
-        tentativas++;
+      let checkCount = 0;
+      let interval = setInterval(() => {
         let canvas = qrDiv.querySelector('canvas');
         let img = qrDiv.querySelector('img');
-
+        
+        // Verifica se o canvas tem conteúdo ou se a imagem carregou
         if (canvas) {
-          clearInterval(verificar);
+          clearInterval(interval);
           resolve(canvas.toDataURL('image/png'));
-        } else if (img && img.complete && img.naturalWidth > 0) {
-          clearInterval(verificar);
-          let c = document.createElement('canvas');
-          c.width = 300;
-          c.height = 300;
-          let ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0, 300, 300);
-          resolve(c.toDataURL('image/png'));
-        } else if (img && !img.complete) {
-          clearInterval(verificar);
-          img.onload = function() {
-            let c = document.createElement('canvas');
-            c.width = 300;
-            c.height = 300;
-            let ctx = c.getContext('2d');
-            ctx.drawImage(img, 0, 0, 300, 300);
-            resolve(c.toDataURL('image/png'));
-          };
-          img.onerror = function() { resolve(""); };
-        } else if (tentativas > 50) {
-          clearInterval(verificar);
-          resolve("");
+        } else if (img && img.src && img.complete && img.naturalWidth > 0) {
+          clearInterval(interval);
+          resolve(img.src);
+        } else if (checkCount++ > 100) { // Aumentado tempo de espera para 5 segundos
+          clearInterval(interval);
+          resolve(""); 
         }
       }, 50);
     });
 
-    // Cria canvas para etiqueta completa
-    let canvas = document.createElement('canvas');
-    let largura = 400;
-    let altura = 500;
-    canvas.width = largura;
-    canvas.height = altura;
-    let ctx = canvas.getContext('2d');
-
-    // Fundo branco
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, largura, altura);
-
-    // Desenha QR no canvas
     if (qrDataUrl) {
+      let canvas = document.createElement('canvas');
+      canvas.width = 400; canvas.height = 500;
+      let ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 400, 500);
+
       await new Promise((resolve) => {
         let tempImg = new Image();
-        tempImg.onload = function() {
-          ctx.drawImage(tempImg, 50, 10, 300, 300);
-          resolve();
+        tempImg.onload = () => { 
+          ctx.drawImage(tempImg, 50, 10, 300, 300); 
+          resolve(); 
         };
-        tempImg.onerror = function() { resolve(); };
         tempImg.src = qrDataUrl;
       });
+
+      ctx.fillStyle = '#1e293b'; ctx.textAlign = 'center'; ctx.font = 'bold 22px Arial';
+      ctx.fillText(bob.item + ' — V' + bob.versao, 200, 340);
+      ctx.font = '18px Arial'; ctx.fillText(bob.tamanho + ' | ' + bob.peso + ' kg', 200, 370);
+      let producaoTexto = bob.data ? "Produção: " + bob.data.split(", ")[0] + " às " + bob.data.split(", ")[1] : "";
+      ctx.font = '14px Arial'; ctx.fillStyle = '#64748b'; ctx.fillText(producaoTexto, 200, 395);
+      ctx.font = '12px Arial'; ctx.fillText(bob.tipoNome, 200, 415);
+
+      let blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+      let nomeArquivo = (bob.item + "_V" + bob.versao + "_" + bob.peso + "kg_" + i + ".png").replace(/[^a-zA-Z0-9._-]/g, '_');
+      arquivos.push({ nome: nomeArquivo, blob: blob });
     }
-
-// Texto
-    ctx.fillStyle = '#1e293b';
-    ctx.textAlign = 'center';
-
-    ctx.font = 'bold 22px Arial';
-    ctx.fillText(bob.item + ' — V' + bob.versao, largura / 2, 340);
-
-    ctx.font = '18px Arial';
-    ctx.fillText(bob.tamanho + ' | ' + bob.peso + ' kg', largura / 2, 370);
-
-    // Data de produção
-    let producaoTexto = "";
-    if (bob.data) {
-      let partesData = bob.data.split(", ");
-      if (partesData.length === 2) {
-        producaoTexto = "Produção: " + partesData[0] + " às " + partesData[1];
-      }
-    }
-
-    ctx.font = '14px Arial';
-    ctx.fillStyle = '#64748b';
-    ctx.fillText(producaoTexto || "", largura / 2, 395);
-
-    ctx.font = '12px Arial';
-    ctx.fillText(bob.tipoNome, largura / 2, 415);
-
-    // Converte para blob
-    let blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-
-    let nomeArquivo = bob.item + "_V" + bob.versao + "_" + bob.peso + "kg.png";
-    nomeArquivo = nomeArquivo.replace(/[^a-zA-Z0-9._-]/g, '_');
-
-    arquivos.push({ nome: nomeArquivo, blob: blob });
-
-    await new Promise(r => setTimeout(r, 10));
+    
+    // Limpa o div para liberar memória
+    qrDiv.remove();
+    // Pequena pausa para o navegador respirar
+    await new Promise(r => setTimeout(r, 20));
   }
 
   container.remove();
+  if (document.getElementById('modalProgressoQR')) document.getElementById('modalProgressoQR').remove();
 
-  let modalProgresso = document.getElementById('modalProgressoQR');
-  if (modalProgresso) modalProgresso.remove();
-
-  if (arquivos.length === 1) {
-    let link = document.createElement('a');
-    link.href = URL.createObjectURL(arquivos[0].blob);
-    link.download = arquivos[0].nome;
+  if (arquivos.length > 0) {
+    const zip = new JSZip();
+    const pasta = zip.folder("QR_Codes_" + getTimestamp());
+    arquivos.forEach(arq => pasta.file(arq.nome, arq.blob));
+    const content = await zip.generateAsync({ type: "blob" });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(content);
+    link.download = "QR_Export_" + getTimestamp() + ".zip";
     link.click();
+    mostrarToast(arquivos.length + " imagens extraídas com sucesso");
   } else {
-    mostrarToast(arquivos.length + " imagens QR sendo baixadas...");
-    for (let i = 0; i < arquivos.length; i++) {
-      let link = document.createElement('a');
-      link.href = URL.createObjectURL(arquivos[i].blob);
-      link.download = arquivos[i].nome;
-      link.click();
-      await new Promise(r => setTimeout(r, 200));
-    }
+    mostrarToast("Erro: Nenhuma imagem processada", "erro");
   }
-
-  mostrarToast(arquivos.length + " QR codes exportados como imagens");
 }
-
 window.exportarQRCodes = exportarQRCodes;
 window.exportarQRCodesZIP = exportarQRCodesZIP;
 
