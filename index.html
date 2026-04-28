@@ -252,6 +252,11 @@
           <input type="number" id="geradorQtd" placeholder="Qtd" value="1" min="1" style="flex:1;">
         </div>
 
+        <!-- Campo de data manual (só aparece quando a opção "manual" está ativa) -->
+        <div id="geradorDataManualContainer" class="hidden">
+          <input type="datetime-local" id="geradorDataManual" style="width:100%;">
+        </div>
+
         <div style="display:flex; gap:8px;">
           <button class="btn-add" onclick="geradorAdicionar()" style="flex:1;">+ Adicionar</button>
           <button class="last-item" onclick="geradorRepetirUltimo()" style="flex:1;">Repetir último</button>
@@ -269,12 +274,12 @@
 
       <div class="gerador-botoes-fixos">
         <!-- ANTES DE CONCLUIR -->
-<div id="geradorBotoesAntes">
-  <div style="display:flex; gap:8px;">
-    <button class="btn-cancelar" onclick="geradorCancelar()" style="flex:1;">✕ Cancelar</button>
-    <button class="btn-confirmar" onclick="geradorConcluir()" style="flex:1;">✅ Concluir</button>
-  </div>
-</div>
+        <div id="geradorBotoesAntes">
+          <div style="display:flex; gap:8px;">
+            <button class="btn-cancelar" onclick="geradorCancelar()" style="flex:1;">✕ Cancelar</button>
+            <button class="btn-confirmar" onclick="geradorConcluir()" style="flex:1;">✅ Concluir</button>
+          </div>
+        </div>
 
         <!-- DEPOIS DE CONCLUIR -->
         <div id="geradorBotoesDepois" class="hidden">
@@ -283,8 +288,9 @@
         </div>
       </div>
     </div>
-  </div>
-</div> 
+
+  </div> <!-- fecha modal-gerador-content -->
+</div>   <!-- fecha modalGerador --> 
 
 <!-- ================= MODAL OPÇÕES LONG PRESS ================= -->
 <div id="modalOpcoes" class="modal-overlay hidden">
@@ -446,6 +452,7 @@
         🏷️ Gerar etiquetas
         <span id="btnPendentesContador" class="pendentes-badge" style="display:none;"></span>
       </button>
+      <button class="btn-opcao btn-editar-opcao" onclick="abrirConfigDataProducao()">📅 Data de produção</button>
       <div class="btn-opcao dark-switch-row" onclick="alternarModoEscuro()">
         <div class="dark-switch-label">
           <span id="darkModeIcon">🌙</span>
@@ -539,6 +546,38 @@
       <div id="cadastroAcordeao" class="cadastro-acordeao"></div>
       <button class="btn-opcao btn-cancelar-opcao" onclick="voltarConfigPrincipal()">← Voltar</button>
     </div>
+  </div>
+</div>
+
+<!-- ================= MODAL CONFIG DATA PRODUÇÃO ================= -->
+<!-- Para remover/editar: busque por "MODAL CONFIG DATA PRODUÇÃO" -->
+<div id="modalConfigDataProducao" class="modal-overlay hidden" onclick="if(event.target===this) fecharConfigDataProducao()">
+  <div class="modal-opcoes-content" style="min-width:280px;">
+    <h3>Data de produção</h3>
+    <p style="font-size:12px; color:#64748b; margin-bottom:12px;">Como a data será registrada nas etiquetas:</p>
+
+    <button class="btn-opcao btn-editar-opcao" style="text-align:left;" onclick="document.querySelector('input[name=opcaoData][value=geracao]').checked=true; salvarOpcaoData('geracao');">
+      <label style="pointer-events:none; display:flex; align-items:center; gap:8px; margin:0;">
+        <input type="radio" name="opcaoData" value="geracao" style="flex-shrink:0;">
+        <span>📅 Data da geração<br><small style="color:#64748b;">Registra quando você clica em Concluir</small></span>
+      </label>
+    </button>
+
+    <button class="btn-opcao btn-editar-opcao" style="text-align:left;" onclick="document.querySelector('input[name=opcaoData][value=entrada]').checked=true; salvarOpcaoData('entrada');">
+      <label style="pointer-events:none; display:flex; align-items:center; gap:8px; margin:0;">
+        <input type="radio" name="opcaoData" value="entrada" style="flex-shrink:0;">
+        <span>📥 Data da entrada<br><small style="color:#64748b;">Registra quando escaneia para dar entrada</small></span>
+      </label>
+    </button>
+
+    <button class="btn-opcao btn-editar-opcao" style="text-align:left;" onclick="document.querySelector('input[name=opcaoData][value=manual]').checked=true; salvarOpcaoData('manual');">
+      <label style="pointer-events:none; display:flex; align-items:center; gap:8px; margin:0;">
+        <input type="radio" name="opcaoData" value="manual" style="flex-shrink:0;">
+        <span>✏️ Escolher manualmente<br><small style="color:#64748b;">Campo de data aparece no gerador</small></span>
+      </label>
+    </button>
+
+    <button class="btn-opcao btn-cancelar-opcao" onclick="fecharConfigDataProducao()">Fechar</button>
   </div>
 </div>
 
