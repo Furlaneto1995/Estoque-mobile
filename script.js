@@ -2944,7 +2944,17 @@ function entradaRapidaQR() {
   let idSalvar = dados.id || crypto.randomUUID();
   estoque[identificador] = (estoque[identificador] || 0) + peso;
   estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
-  historico.push({ id: idSalvar, data: dataEntrada, tipo: "Entrada", item: identificador, qtd: peso });
+// Se for opção "entrada", usa a data atual
+let dataFinal = (dados.data) ? dados.data : ((opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : dataEntrada);
+
+historico.push({ 
+  id: idSalvar, 
+  data: dataFinal, 
+  tipo: "Entrada", 
+  item: identificador, 
+  qtd: peso,
+  dataProducao: (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : undefined
+});
   ultimoItem = identificador;
   salvarDados();
   atualizarTudo();
@@ -3115,7 +3125,16 @@ async function processarLeituraContinua(textoLido) {
   estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
   let dataEntrada = dados.data || new Date().toLocaleString();
   let idSalvar = dados.id || crypto.randomUUID();
-  historico.push({ id: idSalvar, data: dataEntrada, tipo: "Entrada", item: identificador, qtd: peso });
+let dataFinal = (dados.data) ? dados.data : ((opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : dataEntrada);
+
+historico.push({ 
+  id: idSalvar, 
+  data: dataFinal, 
+  tipo: "Entrada", 
+  item: identificador, 
+  qtd: peso,
+  dataProducao: (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : undefined
+});
   ultimoItem = identificador;
     salvarDados();
 
@@ -3789,6 +3808,7 @@ function abrirGerador() {
   let busca = document.getElementById('geradorBusca');
   if (busca) busca.value = '';
   geradorRenderizarLista1();
+  atualizarCampoDataManualGerador();
 }
 
 function geradorConcluir() {
@@ -4021,7 +4041,8 @@ function geradorAdicionar() {
     geradorEditandoIndex = null;
     mostrarToast('Bobina atualizada');
   } else {
-    geradorBobinas.push({ tipo, item, versao, tamanho, peso, qtd, ids: geradorGerarIds(qtd) });
+let dataProducao = obterDataProducaoParaEtiqueta();
+geradorBobinas.push({ tipo, item, versao, tamanho, peso, qtd, ids: geradorGerarIds(qtd), dataProducao: dataProducao });
     mostrarToast('Adicionada');
   }
   geradorLimparCampos();
@@ -4231,7 +4252,22 @@ function geradorMontarZPL() {
   geradorBobinas.forEach(bob => {
     bob.ids.forEach(id => {
       let idCurto = id.replace(/-/g, '').substring(0, 8);
-      todas.push({ qrData: 'BOB/' + bob.item + '/' + bob.versao + '/' + Math.round(bob.peso) + '/' + idCurto, desc: bob.item + '/' + bob.versao + ' - ' + bob.peso });
+let dataQR = '';
+if (bob.dataProducao) {
+  let partesData = bob.dataProducao.split(", ");
+  if (partesData.length === 2) {
+    let dma = partesData[0].split("/");
+    let hms = partesData[1].replace(/:/g, "");
+    if (dma.length === 3 && hms.length >= 4) {
+      dataQR = "/" + dma[0] + dma[1] + dma[2] + "/" + hms;
+    }
+  }
+}
+
+todas.push({ 
+  qrData: 'BOB/' + bob.item + '/' + bob.versao + '/' + Math.round(bob.peso) + dataQR + '/' + idCurto, 
+  desc: bob.item + '/' + bob.versao + ' - ' + bob.peso 
+});
     });
   });
   return montarZPLDeLista(todas, 8);
@@ -4471,10 +4507,27 @@ function pendentesMontarZPL() {
 
 function pendentesVisualizarZPL() {
   if (etiquetasPendentes.length === 0) { mostrarToast('Nenhuma pendente', 'erro'); return; }
-  let todas = etiquetasPendentes.map(p => ({
-    qrData: p.item + '/' + p.versao + '/' + Math.round(p.peso) + '/' + p.idCurto,
-    item: p.item, versao: p.versao, peso: p.peso
-  }));
+  
+  let todas = etiquetasPendentes.map(p => {
+    let dataQR = '';
+    if (p.dataProducao) {
+      let partesData = p.dataProducao.split(", ");
+      if (partesData.length === 2) {
+        let dma = partesData[0].split("/");
+        let hms = partesData[1].replace(/:/g, "");
+        if (dma.length === 3 && hms.length >= 4) {
+          dataQR = "/" + dma[0] + dma[1] + dma[2] + "/" + hms;
+        }
+      }
+    }
+    return {
+      qrData: p.item + '/' + p.versao + '/' + Math.round(p.peso) + dataQR + '/' + p.idCurto,
+      item: p.item,
+      versao: p.versao,
+      peso: p.peso
+    };
+  });
+
   previewDados.bobinas = todas;
   previewDados.paginaAtual = 0;
   previewDados.totalPaginas = Math.ceil(todas.length / 8);
@@ -4544,6 +4597,84 @@ function geradorLimparEFechar() {
 }
 
 function geradorExportarDoPreview() { fecharPreviewEtiqueta(); geradorGerarZPL(); }
+
+/* ================= CONFIGURAÇÃO DE DATA DE PRODUÇÃO ================= */
+// Opções disponíveis:
+//   'geracao'  → usa a data/hora do momento em que clica "Concluir" no gerador
+//   'entrada'  → usa a data/hora do momento em que escaneia para dar entrada no estoque
+//   'manual'   → o usuário escolhe a data/hora manualmente no campo do gerador
+// Para remover/editar: busque por "CONFIGURAÇÃO DE DATA DE PRODUÇÃO"
+
+let opcaoDataProducao = localStorage.getItem('opcaoDataProducao') || 'geracao';
+
+function abrirConfigDataProducao() {
+  fecharModalConfig();
+  
+  let modal = document.getElementById('modalConfigDataProducao');
+  modal.classList.remove('hidden');
+
+  // Marca a opção salva corretamente
+  modal.querySelectorAll('input[name="opcaoData"]').forEach(function(radio) {
+    radio.checked = (radio.value === opcaoDataProducao);
+  });
+}
+
+function fecharConfigDataProducao() {
+  document.getElementById('modalConfigDataProducao').classList.add('hidden');
+}
+
+function salvarOpcaoData(opcao) {
+  opcaoDataProducao = opcao;
+  localStorage.setItem('opcaoDataProducao', opcao);
+  atualizarCampoDataManualGerador();
+  mostrarToast('Data de produção: ' + nomeOpcaoData(opcao));
+}
+
+function nomeOpcaoData(opcao) {
+  if (opcao === 'geracao') return 'data da geração';
+  if (opcao === 'entrada') return 'data da entrada';
+  if (opcao === 'manual') return 'manual';
+  return opcao;
+}
+
+function atualizarCampoDataManualGerador() {
+  // Mostra ou esconde o campo de data manual no gerador
+  let container = document.getElementById('geradorDataManualContainer');
+  if (!container) return;
+
+  if (opcaoDataProducao === 'manual') {
+    container.classList.remove('hidden');
+    // Define valor padrão como agora
+    let input = document.getElementById('geradorDataManual');
+    if (input && !input.value) {
+      let agora = new Date();
+      agora.setMinutes(agora.getMinutes() - agora.getTimezoneOffset());
+      input.value = agora.toISOString().slice(0, 16);
+    }
+  } else {
+    container.classList.add('hidden');
+  }
+}
+
+function obterDataProducaoParaEtiqueta() {
+  // Retorna a data formatada para gravar na etiqueta/QR
+  // Chamada quando uma bobina é adicionada no gerador
+
+  if (opcaoDataProducao === 'geracao') {
+    return new Date().toLocaleString('pt-BR');
+  }
+
+  if (opcaoDataProducao === 'manual') {
+    let input = document.getElementById('geradorDataManual');
+    if (input && input.value) {
+      return new Date(input.value).toLocaleString('pt-BR');
+    }
+    return new Date().toLocaleString('pt-BR');
+  }
+
+  // Para 'entrada', retorna null (será definida na hora da entrada)
+  return null;
+}
 
 /* ================= EXPOSIÇÃO GLOBAL ================= */
 
@@ -4617,3 +4748,6 @@ window.alternarModoEscuro = alternarModoEscuro;
 window.abrirConfigCadastro = abrirConfigCadastro;
 window.copiarZPLDoPreview = copiarZPLDoPreview;
 window.geradorLimparEFechar = geradorLimparEFechar;
+window.abrirConfigDataProducao = abrirConfigDataProducao;
+window.fecharConfigDataProducao = fecharConfigDataProducao;
+window.salvarOpcaoData = salvarOpcaoData;
