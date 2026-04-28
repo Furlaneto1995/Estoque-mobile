@@ -38,6 +38,14 @@ function normalizarTexto(texto){
     .toLowerCase();
 }
 
+function descobrirTipoPorItem(item) {
+  let tipoEncontrado = "";
+  Object.keys(banco).forEach(tipo => {
+    if (banco[tipo] && banco[tipo][item]) tipoEncontrado = tipo;
+  });
+  return tipoEncontrado;
+}
+
 /* ================= AUXILIARES EXCLUSÃO ================= */
 
 function obterTipoDoIdentificador(identificador) {
@@ -51,7 +59,7 @@ function obterTipoDoIdentificador(identificador) {
 
 function registrarExclusaoHistorico(itemChave, qtd, entradaOriginal = null) {
   historico.push({
-    id: Date.now() + Math.random(),
+    id: crypto.randomUUID(),
     data: new Date().toLocaleString(),
     tipo: 'Exclusão',
     item: itemChave,
@@ -184,6 +192,7 @@ let banco = {};
 
 let estoque = {};
 let historico = [];
+let etiquetasPendentes = [];
 
 function carregarDados() {
   carregarBanco();
@@ -191,23 +200,20 @@ function carregarDados() {
   historico = JSON.parse(localStorage.getItem("historico")) || [];
 
   historico.forEach(h => {
-    if (h.tipo === "Entrada" && !h.id) {
-      h.id = Date.now() + Math.random();
+    if (h.tipo === "Entrada" && (!h.id || typeof h.id === 'number')) {
+      h.id = crypto.randomUUID();
     }
   });
 
-  // Modo escuro persistente
   if (localStorage.getItem('modoEscuro') === 'true') {
-  document.body.classList.add('dark-mode');
+    document.body.classList.add('dark-mode');
+    let toggle = document.getElementById('darkModeToggle');
+    if (toggle) toggle.checked = true;
+    let icone = document.getElementById('darkModeIcon');
+    if (icone) icone.textContent = '☀️';
+  }
 
-  // Sincroniza o toggle e ícone ao carregar
-  let toggle = document.getElementById('darkModeToggle');
-  if (toggle) toggle.checked = true;
-
-  let icone = document.getElementById('darkModeIcon');
-  if (icone) icone.textContent = '☀️';
-}
-
+  carregarPendentes();
   salvarDados();
   atualizarTabela();
   atualizarHistorico();
@@ -218,14 +224,13 @@ function salvarDados() {
   localStorage.setItem("historico", JSON.stringify(historico));
 }
 
-/* ================= BANCO NO LOCALSTORAGE (item 18) ================= */
+/* ================= BANCO NO LOCALSTORAGE ================= */
 
 function carregarBanco() {
   let salvo = localStorage.getItem("bancoCustom");
   if (salvo) {
     banco = JSON.parse(salvo);
   } else {
-    // Primeira vez: copia o banco padrão
     banco = JSON.parse(JSON.stringify(bancoPadrao));
     localStorage.setItem("bancoCustom", JSON.stringify(banco));
   }
@@ -235,9 +240,7 @@ function salvarBanco() {
   localStorage.setItem("bancoCustom", JSON.stringify(banco));
 }
 
-let selecionado = null;
 let ultimoItem = null;
-let backup = null;
 
 let ordemEstoque = { coluna: null, asc: true };
 let filtroTipoEstoque = 0;
@@ -247,6 +250,12 @@ let filtroMovimentacao = 0;
 
 document.addEventListener("DOMContentLoaded", function () {
   carregarDados();
+  let modalGer = document.getElementById('modalGerador');
+  if (modalGer) modalGer.classList.add('hidden');
+  document.getElementById('modalPendentes').classList.add('hidden');
+  document.querySelector('.nav-top').classList.remove('hidden');
+  document.querySelector('.top-header').classList.remove('hidden');
+  mostrarTela('movimentar');
 });
 
 /* ================= NAVEGAÇÃO ================= */
@@ -256,31 +265,31 @@ window.mostrarTela = function(t){
   document.getElementById("estoque").classList.add("hidden");
   document.getElementById("historico").classList.add("hidden");
   document.getElementById("detalhesTipo").classList.add("hidden");
-  document.getElementById(t).classList.remove("hidden");
+
+  let gerador = document.getElementById("modalGerador");
+  if (gerador) gerador.classList.add("hidden");
+
+  let tela = document.getElementById(t);
+  if (tela) tela.classList.remove("hidden");
 
   document.querySelectorAll('.nav-top button').forEach(btn => btn.classList.remove('ativo'));
-  document.querySelector(`.nav-top button[onclick="mostrarTela('${t}')"]`).classList.add('ativo');
+  let btnTela = document.querySelector(`.nav-top button[onclick="mostrarTela('${t}')"]`);
+  if (btnTela) btnTela.classList.add('ativo');
 
   const btnExpandir = document.getElementById("btnExpandir");
-  if (t === "movimentar") {
-    btnExpandir.style.visibility = "hidden";
-    btnExpandir.style.pointerEvents = "none";
-  } else {
-    btnExpandir.style.visibility = "visible";
-    btnExpandir.style.pointerEvents = "auto";
+  if (btnExpandir) {
+    if (t === "movimentar" || t === "geradorEtiquetas") {
+      btnExpandir.style.visibility = "hidden";
+      btnExpandir.style.pointerEvents = "none";
+    } else {
+      btnExpandir.style.visibility = "visible";
+      btnExpandir.style.pointerEvents = "auto";
+    }
   }
 
   atualizarTabela();
   atualizarHistorico();
-}
-
-/* ================= CLASSIFICAÇÃO ================= */
-
-function classificar(item){
-  if(item.startsWith("2000047")) return "brf";
-  if(item.includes("-4")) return "laminacao";
-  return "tampas";
-}
+};
 
 /* ================= FILTRO POR TIPO ================= */
 
@@ -301,8 +310,7 @@ itemSelect.addEventListener("change", function(){
   versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
   let tipo = tipoSelect.value;
   let item = itemSelect.value;
-  if(!banco[tipo]) return;
-  if(!banco[tipo][item]) return;
+  if(!banco[tipo] || !banco[tipo][item]) return;
   Object.keys(banco[tipo][item]).forEach(v => {
     let tamanho = banco[tipo][item][v].tamanho;
     let opt = document.createElement('option');
@@ -342,8 +350,6 @@ versaoSelect.addEventListener("change", function(){
 });
 
 /* ================= BUSCA MANUAL ================= */
-
-function selecionarManual(){}
 
 function filtrar(){
   let termo = buscaItem.value.toLowerCase();
@@ -453,7 +459,7 @@ function movimentar(tipoMov){
   }
 
   historico.push({
-    id: Date.now() + Math.random(),
+    id: crypto.randomUUID(),
     data: new Date().toLocaleString(),
     tipo: tipoMov === 'add' ? 'Entrada' : 'Saída',
     item: identificador,
@@ -617,8 +623,6 @@ function remover(item){
 
   salvarEstadoParaDesfazer();
 
-  backup = { tipo: 'estoque', item, valor: estoque[item], qtd: estoque[item + '_qtd'] };
-
   let entradasParaExcluir = historico.filter(h =>
     h.item === item && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque
   );
@@ -626,7 +630,7 @@ function remover(item){
   entradasParaExcluir.forEach(h => {
     h._removidaEstoque = true;
     historico.push({
-      id: Date.now() + Math.random(),
+      id: crypto.randomUUID(),
       data: new Date().toLocaleString(),
       tipo: 'Exclusão',
       item: item,
@@ -836,132 +840,21 @@ function atualizarHistorico(){
         break;
     }
 
-html += `
-  <tr class="${corLinha}">
-    <td>${d.data}</td>
-    <td>${movTexto}${refTexto}</td>
-    <td>${nomeBonitoTipo(d.tipo)}</td>
-    <td>${d.item}<br><strong>V ${d.versao}</strong><br><span style="font-size:11px;">${d.tamanho}</span></td>
-    <td>${d.original.qtdOriginal ? Math.round(d.qtd)+'/'+Math.round(d.original.qtdOriginal) : d.qtd}</td>
-    <td><button class='btn-menu-historico' onclick="abrirAcoesHistorico(${indexReal})">⋮</button></td>
-  </tr>
-`;
+    html += `
+      <tr class="${corLinha}">
+        <td>${d.data}</td>
+        <td>${movTexto}${refTexto}</td>
+        <td>${nomeBonitoTipo(d.tipo)}</td>
+        <td>${d.item}<br><strong>V ${d.versao}</strong><br><span style="font-size:11px;">${d.tamanho}</span></td>
+        <td>${d.original.qtdOriginal ? Math.round(d.qtd)+'/'+Math.round(d.original.qtdOriginal) : d.qtd}</td>
+        <td><button class='btn-menu-historico' onclick="abrirAcoesHistorico(${indexReal})">⋮</button></td>
+      </tr>
+    `;
   });
   historicoTabela.innerHTML = html;
 }
 
 /* ================= EXPORTAÇÃO EXCEL ================= */
-
-function exportarParaExcel(nomeArquivo, dados){
-  if(dados.length === 0){ mostrarToast("Nenhum dado para exportar!", 'erro'); return; }
-  let tabela = "<table border='1'><tr>";
-  Object.keys(dados[0]).forEach(chave=>{ tabela += "<th>" + chave + "</th>"; });
-  tabela += "</tr>";
-  dados.forEach(linha=>{
-    tabela += "<tr>";
-    Object.values(linha).forEach(valor=>{ tabela += "<td>" + valor + "</td>"; });
-    tabela += "</tr>";
-  });
-  tabela += "</table>";
-  let blob = new Blob([tabela], { type: "application/vnd.ms-excel" });
-  let link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = nomeArquivo + ".xls";
-  link.click();
-}
-
-let tipoExportacaoAtual = '';
-
-function ajustarOpcaoPeriodo() {
-  const tipoSelecionado = document.querySelector('input[name="tipoDados"]:checked');
-  const blocoPeriodo = document.getElementById("blocoPeriodo");
-  const areaPeriodo = document.getElementById("areaPeriodo");
-  const radioTudo = document.querySelector('input[name="tipoPeriodo"][value="tudo"]');
-  if (!tipoSelecionado) return;
-  if (tipoSelecionado.value === "backup") {
-    if (blocoPeriodo) blocoPeriodo.style.display = "none";
-    if (areaPeriodo) areaPeriodo.classList.add("hidden");
-    if (radioTudo) radioTudo.checked = true;
-  } else {
-    if (blocoPeriodo) blocoPeriodo.style.display = "block";
-  }
-}
-
-window.togglePeriodo = function(show){
-  const area = document.getElementById("areaPeriodo");
-  const tipoSelecionado = document.querySelector('input[name="tipoDados"]:checked');
-  if (!area) return;
-  if (tipoSelecionado && tipoSelecionado.value === "backup") { area.classList.add("hidden"); return; }
-  if(show) area.classList.remove("hidden"); else area.classList.add("hidden");
-};
-
-window.executarExportacao = function(){
-  const radioDados = document.querySelector('input[name="tipoDados"]:checked');
-  const radioPeriodo = document.querySelector('input[name="tipoPeriodo"]:checked');
-  if (!radioDados || !radioPeriodo) return;
-  const tipoDados = radioDados.value, tipoPeriodo = radioPeriodo.value;
-  let dataInicioExp = null, dataFimExp = null;
-  if (tipoPeriodo === 'periodo') {
-    dataInicioExp = document.getElementById("exportDataInicio").value;
-    dataFimExp = document.getElementById("exportDataFim").value;
-    if (!dataInicioExp && !dataFimExp) {
-      mostrarToast("Informe pelo menos uma data", "erro");
-      return;
-    }
-  }
-  const formatoSelecionado = document.querySelector('input[name="formatoExport"]:checked');
-  const formato = formatoSelecionado ? formatoSelecionado.value : 'excel';
-
-  if (tipoDados === 'qrcodes') {
-    let bobinas = coletarBobinasParaQR(dataInicioExp, dataFimExp);
-    if (bobinas.length === 0) {
-      mostrarToast("Nenhuma bobina encontrada no período", "erro");
-      return;
-    }
-
-    if (formato === 'zpl') {
-      exportarZPLZebra(dataInicioExp, dataFimExp);
-    } else if (formato === 'imagens') {
-      exportarQRCodesZIP(dataInicioExp, dataFimExp);
-    } else if (formato === 'csv') {
-      exportarCSVZebraMult(dataInicioExp, dataFimExp, 6);
-    }
-    fecharModalConfig();
-    return;
-  }
-
-
-  if (tipoDados === 'estoque') {
-    let temDados = Object.keys(estoque).some(k => !k.endsWith('_qtd'));
-    if (!temDados) {
-      mostrarToast("Estoque vazio", "erro");
-      return;
-    }
-  }
-
-  if (tipoDados === 'historico') {
-    let dadosFiltrados = historico.filter(h => {
-      if (!dataInicioExp && !dataFimExp) return true;
-      let dataISO = h.data.split(",")[0].trim().split("/").reverse().join("-");
-      return (!dataInicioExp || dataISO >= dataInicioExp) && (!dataFimExp || dataISO <= dataFimExp);
-    });
-    if (dadosFiltrados.length === 0) {
-      mostrarToast("Nenhum registro encontrado no período", "erro");
-      return;
-    }
-  }
-
-  if (formato === 'pdf') {
-    if (tipoDados === 'estoque') exportarEstoquePDF(dataInicioExp, dataFimExp);
-    if (tipoDados === 'historico') exportarHistoricoPDF(dataInicioExp, dataFimExp);
-    if (tipoDados === 'ambos') { exportarEstoquePDF(dataInicioExp, dataFimExp); exportarHistoricoPDF(dataInicioExp, dataFimExp); }
-  } else {
-    if (tipoDados === 'estoque') exportarEstoque(dataInicioExp, dataFimExp);
-    if (tipoDados === 'historico') exportarHistorico(dataInicioExp, dataFimExp);
-    if (tipoDados === 'ambos') exportarAmbos(dataInicioExp, dataFimExp);
-  }
-  fecharModalConfig();
-}
 
 function getTimestamp(){
   const agora = new Date();
@@ -970,10 +863,8 @@ function getTimestamp(){
 
 function exportarEstoque(dataInicioP, dataFimP) {
   const wb = XLSX.utils.book_new();
-
   let dadosEstoque = [];
-  let totalGeral = 0;
-  let totalBobinasGeral = 0;
+  let totalGeral = 0, totalBobinasGeral = 0;
   let totaisPorTipo = {};
 
   Object.keys(estoque).forEach(chave => {
@@ -987,7 +878,6 @@ function exportarEstoque(dataInicioP, dataFimP) {
     let tamanho = banco[tipoInterno][item][versao].tamanho;
     let peso = estoque[chave];
     let qtdBobinas = estoque[chave + '_qtd'] || 0;
-
     if (qtdBobinas === 0 && peso > 0) {
       let entradasItem = historico.filter(h => h.item === chave && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
       let soma = 0;
@@ -998,57 +888,31 @@ function exportarEstoque(dataInicioP, dataFimP) {
       }
       if (qtdBobinas === 0) qtdBobinas = 1;
     }
-
     let nomeT = nomeCompletoTipo(tipoInterno);
-
     totalGeral += peso;
     totalBobinasGeral += qtdBobinas;
-
-    if (!totaisPorTipo[nomeT]) {
-      totaisPorTipo[nomeT] = { kg: 0, bobinas: 0 };
-    }
+    if (!totaisPorTipo[nomeT]) totaisPorTipo[nomeT] = { kg: 0, bobinas: 0 };
     totaisPorTipo[nomeT].kg += peso;
     totaisPorTipo[nomeT].bobinas += qtdBobinas;
-
-    dadosEstoque.push({
-      Tipo: nomeBonitoTipo(tipoInterno),
-      Item: item,
-      Versão: versao,
-      Medidas: tamanho,
-      Kg: peso,
-      Bobinas: qtdBobinas
-    });
+    dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: peso, Bobinas: qtdBobinas });
   });
 
-  if (dadosEstoque.length === 0) {
-    mostrarToast("Estoque vazio", "erro");
-    return;
-  }
+  if (dadosEstoque.length === 0) { mostrarToast("Estoque vazio", "erro"); return; }
 
-  // Ordena por tipo
   let ordemTipo = { 'BRF': 1, 'Tampa': 2, '1ª Lam.': 3 };
   dadosEstoque.sort((a, b) => (ordemTipo[a.Tipo] || 99) - (ordemTipo[b.Tipo] || 99));
 
-  // ===== MONTA A PLANILHA =====
-
   let linhas = [];
-
-  // Cabeçalho do relatório
   linhas.push(['CONFERÊNCIA DE ESTOQUES', '', '', '', '', '']);
   linhas.push(['Data do relatório:', new Date().toLocaleString('pt-BR'), '', '', '', '']);
   linhas.push(['', '', '', '', '', '']);
-
-  // Resumo geral
   linhas.push(['RESUMO GERAL', '', '', '', '', '']);
   linhas.push(['Total em estoque:', '', '', '', formatarPeso(totalGeral) + ' kg', totalBobinasGeral + ' bobinas']);
   linhas.push(['', '', '', '', '', '']);
-
-  // Resumo por tipo
   linhas.push(['RESUMO POR TIPO', '', '', '', '', '']);
   linhas.push(['Tipo', '', '', '', 'Kg', 'Bobinas']);
 
-  let tiposOrdem = ['BRF', 'Tampas', '1ª Laminação'];
-  tiposOrdem.forEach(nomeT => {
+  ['BRF', 'Tampas', '1ª Laminação'].forEach(nomeT => {
     if (totaisPorTipo[nomeT]) {
       let perc = totalGeral > 0 ? Math.round((totaisPorTipo[nomeT].kg / totalGeral) * 100) : 0;
       linhas.push([nomeT, '', '', perc + '%', formatarPeso(totaisPorTipo[nomeT].kg) + ' kg', totaisPorTipo[nomeT].bobinas + ' bobinas']);
@@ -1057,32 +921,20 @@ function exportarEstoque(dataInicioP, dataFimP) {
 
   linhas.push(['', '', '', '', '', '']);
   linhas.push(['', '', '', '', '', '']);
-
-  // Cabeçalho da tabela
   linhas.push(['DETALHAMENTO', '', '', '', '', '']);
   linhas.push(['Tipo', 'Item', 'Versão', 'Medidas', 'Kg', 'Bobinas']);
 
-  // Dados agrupados por tipo
-  let tipoAtual = '';
-  let subtotalKg = 0;
-  let subtotalBob = 0;
-
+  let tipoAtual = '', subtotalKg = 0, subtotalBob = 0;
   dadosEstoque.forEach((d, idx) => {
-    // Subtotal do tipo anterior quando muda
     if (tipoAtual && d.Tipo !== tipoAtual) {
       linhas.push(['', '', '', 'Subtotal ' + tipoAtual + ':', subtotalKg + ' kg', subtotalBob + ' bobinas']);
       linhas.push(['', '', '', '', '', '']);
-      subtotalKg = 0;
-      subtotalBob = 0;
+      subtotalKg = 0; subtotalBob = 0;
     }
-
     tipoAtual = d.Tipo;
     subtotalKg += d.Kg;
     subtotalBob += d.Bobinas;
-
     linhas.push([d.Tipo, d.Item, d.Versão, d.Medidas, d.Kg, d.Bobinas]);
-
-    // Subtotal do último tipo
     if (idx === dadosEstoque.length - 1) {
       linhas.push(['', '', '', 'Subtotal ' + tipoAtual + ':', subtotalKg + ' kg', subtotalBob + ' bobinas']);
     }
@@ -1092,24 +944,12 @@ function exportarEstoque(dataInicioP, dataFimP) {
   linhas.push(['', '', '', 'TOTAL GERAL:', formatarPeso(totalGeral) + ' kg', totalBobinasGeral + ' bobinas']);
 
   const ws = XLSX.utils.aoa_to_sheet(linhas);
-
-  // Largura das colunas
-  ws['!cols'] = [
-    { wch: 14 },
-    { wch: 14 },
-    { wch: 10 },
-    { wch: 20 },
-    { wch: 14 },
-    { wch: 14 }
-  ];
-
-  // Mescla o título
+  ws['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
   ws['!merges'] = [
     { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
     { s: { r: 3, c: 0 }, e: { r: 3, c: 3 } },
     { s: { r: 6, c: 0 }, e: { r: 6, c: 3 } }
   ];
-
   XLSX.utils.book_append_sheet(wb, ws, "Estoque");
   XLSX.writeFile(wb, "Estoque_" + getTimestamp() + ".xlsx");
   mostrarToast("Estoque exportado com sucesso");
@@ -1141,12 +981,8 @@ function exportarHistorico(dataInicioP, dataFimP){
 
 function exportarAmbos(dataInicioP, dataFimP) {
   const wb = XLSX.utils.book_new();
-
-  // ===== ABA ESTOQUE =====
-
   let dadosEstoque = [];
-  let totalGeral = 0;
-  let totalBobinasGeral = 0;
+  let totalGeral = 0, totalBobinasGeral = 0;
   let totaisPorTipo = {};
 
   Object.keys(estoque).forEach(chave => {
@@ -1160,7 +996,6 @@ function exportarAmbos(dataInicioP, dataFimP) {
     let tamanho = banco[tipoInterno][item][versao].tamanho;
     let peso = estoque[chave];
     let qtdBobinas = estoque[chave + '_qtd'] || 0;
-
     if (qtdBobinas === 0 && peso > 0) {
       let entradasItem = historico.filter(h => h.item === chave && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
       let soma = 0;
@@ -1171,15 +1006,12 @@ function exportarAmbos(dataInicioP, dataFimP) {
       }
       if (qtdBobinas === 0) qtdBobinas = 1;
     }
-
     let nomeT = nomeCompletoTipo(tipoInterno);
     totalGeral += peso;
     totalBobinasGeral += qtdBobinas;
-
     if (!totaisPorTipo[nomeT]) totaisPorTipo[nomeT] = { kg: 0, bobinas: 0 };
     totaisPorTipo[nomeT].kg += peso;
     totaisPorTipo[nomeT].bobinas += qtdBobinas;
-
     dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: peso, Bobinas: qtdBobinas });
   });
 
@@ -1208,16 +1040,12 @@ function exportarAmbos(dataInicioP, dataFimP) {
   linhasEstoque.push(['DETALHAMENTO', '', '', '', '', '']);
   linhasEstoque.push(['Tipo', 'Item', 'Versão', 'Medidas', 'Kg', 'Bobinas']);
 
-  let tipoAtual = '';
-  let subtotalKg = 0;
-  let subtotalBob = 0;
-
+  let tipoAtual = '', subtotalKg = 0, subtotalBob = 0;
   dadosEstoque.forEach((d, idx) => {
     if (tipoAtual && d.Tipo !== tipoAtual) {
       linhasEstoque.push(['', '', '', 'Subtotal ' + tipoAtual + ':', subtotalKg + ' kg', subtotalBob + ' bobinas']);
       linhasEstoque.push(['', '', '', '', '', '']);
-      subtotalKg = 0;
-      subtotalBob = 0;
+      subtotalKg = 0; subtotalBob = 0;
     }
     tipoAtual = d.Tipo;
     subtotalKg += d.Kg;
@@ -1239,8 +1067,6 @@ function exportarAmbos(dataInicioP, dataFimP) {
     { s: { r: 6, c: 0 }, e: { r: 6, c: 3 } }
   ];
   XLSX.utils.book_append_sheet(wb, wsEstoque, "Estoque");
-
-  // ===== ABA HISTÓRICO =====
 
   let dadosHistorico = historico.filter(h => {
     if (!dataInicioP && !dataFimP) return true;
@@ -1275,8 +1101,7 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
   const pageW = doc.internal.pageSize.width;
 
   let dadosEstoque = [];
-  let totalGeral = 0;
-  let totalBobinasGeral = 0;
+  let totalGeral = 0, totalBobinasGeral = 0;
   let totaisPorTipo = {};
 
   Object.keys(estoque).forEach(chave => {
@@ -1290,7 +1115,6 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
     let tamanho = banco[tipoInterno][item][versao].tamanho;
     let peso = estoque[chave];
     let qtdBobinas = estoque[chave + '_qtd'] || 0;
-
     if (qtdBobinas === 0 && peso > 0) {
       let entradasItem = historico.filter(h => h.item === chave && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
       let soma = 0;
@@ -1301,15 +1125,12 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
       }
       if (qtdBobinas === 0) qtdBobinas = 1;
     }
-
     let nomeT = nomeCompletoTipo(tipoInterno);
     totalGeral += peso;
     totalBobinasGeral += qtdBobinas;
-
     if (!totaisPorTipo[nomeT]) totaisPorTipo[nomeT] = { kg: 0, bobinas: 0 };
     totaisPorTipo[nomeT].kg += peso;
     totaisPorTipo[nomeT].bobinas += qtdBobinas;
-
     dadosEstoque.push([nomeBonitoTipo(tipoInterno), item, versao, tamanho, String(peso), String(qtdBobinas)]);
   });
 
@@ -1329,7 +1150,6 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
   doc.text(agora, pageW - 14, 9, { align: 'right' });
 
   let resumoY = 20;
-
   doc.setTextColor(60, 60, 60);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
@@ -1345,7 +1165,6 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
       tiposTexto.push(nomeT + ': ' + formatarPeso(totaisPorTipo[nomeT].kg) + ' kg · ' + totaisPorTipo[nomeT].bobinas + ' bob. (' + perc + '%)');
     }
   });
-
   doc.setFontSize(8);
   doc.setTextColor(100, 100, 100);
   doc.text(tiposTexto.join('    |    '), 14, resumoY);
@@ -1356,9 +1175,7 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
   doc.line(14, resumoY, pageW - 14, resumoY);
 
   let tabelaBody = [];
-  let tipoAtual2 = '';
-  let subtotalKg2 = 0;
-  let subtotalBob2 = 0;
+  let tipoAtual2 = '', subtotalKg2 = 0, subtotalBob2 = 0;
 
   dadosEstoque.forEach((d, idx) => {
     if (tipoAtual2 && d[0] !== tipoAtual2) {
@@ -1370,15 +1187,12 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
         { content: formatarPeso(subtotalKg2), styles: { fontStyle: 'bold', fillColor: [245, 247, 250], textColor: [80, 80, 80] } },
         { content: String(subtotalBob2), styles: { fontStyle: 'bold', fillColor: [245, 247, 250], textColor: [80, 80, 80] } }
       ]);
-      subtotalKg2 = 0;
-      subtotalBob2 = 0;
+      subtotalKg2 = 0; subtotalBob2 = 0;
     }
-
     tipoAtual2 = d[0];
     subtotalKg2 += parseFloat(d[4]);
     subtotalBob2 += parseInt(d[5]);
     tabelaBody.push(d);
-
     if (idx === dadosEstoque.length - 1) {
       tabelaBody.push([
         { content: '', styles: { fillColor: [245, 247, 250] } },
@@ -1408,12 +1222,8 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
     headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold', fontSize: 8 },
     alternateRowStyles: { fillColor: [252, 252, 253] },
     columnStyles: {
-      0: { cellWidth: 22 },
-      1: { cellWidth: 30 },
-      2: { cellWidth: 16 },
-      3: { cellWidth: 30 },
-      4: { cellWidth: 20 },
-      5: { cellWidth: 18 }
+      0: { cellWidth: 22 }, 1: { cellWidth: 30 }, 2: { cellWidth: 16 },
+      3: { cellWidth: 30 }, 4: { cellWidth: 20 }, 5: { cellWidth: 18 }
     }
   });
 
@@ -1428,6 +1238,7 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
   doc.save("Estoque_" + getTimestamp() + ".pdf");
   mostrarToast("PDF exportado com sucesso");
 }
+
 function exportarHistoricoPDF(dataInicioP, dataFimP) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape' });
@@ -1470,14 +1281,9 @@ function exportarHistoricoPDF(dataInicioP, dataFimP) {
     headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [240, 244, 255] },
     columnStyles: {
-      0: { cellWidth: 34 },
-      1: { cellWidth: 26 },
-      2: { cellWidth: 16 },
-      3: { cellWidth: 26 },
-      4: { cellWidth: 14 },
-      5: { cellWidth: 24 },
-      6: { cellWidth: 14 },
-      7: { cellWidth: 34 }
+      0: { cellWidth: 34 }, 1: { cellWidth: 26 }, 2: { cellWidth: 16 },
+      3: { cellWidth: 26 }, 4: { cellWidth: 14 }, 5: { cellWidth: 24 },
+      6: { cellWidth: 14 }, 7: { cellWidth: 34 }
     }
   });
 
@@ -1508,7 +1314,6 @@ if ('serviceWorker' in navigator && (location.protocol === 'http:' || location.p
 
 let tipoDetalheAtual = null;
 let ordemDetalhes = { coluna: null, asc: true };
-let destaqueBobinaDetalhe = null;
 
 function ordenarDetalhes(coluna) {
   if (ordemDetalhes.coluna === coluna) { ordemDetalhes.asc = !ordemDetalhes.asc; }
@@ -1523,83 +1328,71 @@ function ordenarDetalhes(coluna) {
 
 function abrirDetalhes(tipo) {
   tipoDetalheAtual = tipo;
-
   document.getElementById('movimentar').classList.add('hidden');
   document.getElementById('estoque').classList.add('hidden');
   document.getElementById('historico').classList.add('hidden');
   document.getElementById('detalhesTipo').classList.remove('hidden');
-
   document.querySelectorAll('.nav-top button').forEach(btn => btn.classList.remove('ativo'));
-
   const btnExpandir = document.getElementById("btnExpandir");
   if (btnExpandir) {
     btnExpandir.style.visibility = "visible";
     btnExpandir.style.pointerEvents = "auto";
   }
-
   document.getElementById('detalheTitulo').textContent = nomeCompletoTipo(tipo);
   document.getElementById('buscaDetalhes').value = '';
   ordemDetalhes = { coluna: null, asc: true };
-
   document.querySelectorAll('#detalhesTipo thead th.sortable').forEach(th => {
     th.classList.remove('asc', 'desc', 'none');
     th.classList.add('none');
   });
-
   atualizarDetalhes();
 }
 
 function fecharDetalhes() {
   tipoDetalheAtual = null;
-  destaqueBobinaDetalhe = null;
   document.getElementById('detalhesTipo').classList.add('hidden');
   document.getElementById('estoque').classList.remove('hidden');
   atualizarTabela();
 }
 
-
 function irParaBobinaNosDetalhes(registro, indexHistorico) {
-  if (!registro || !registro.item || !registro.item.includes(" - V")) return;
+  if (!registro || !registro.item) return;
 
-  let partes = registro.item.split(" - V");
-  let item = partes[0];
-  let versao = partes[1];
-  let tipo = descobrirTipoPorItem(item);
+  let itemApenas = registro.item.split(" - ")[0].trim();
+  let tipo = descobrirTipoPorItem(itemApenas);
 
   if (!tipo) {
-    mostrarToast('Tipo da bobina não encontrado', 'erro');
+    mostrarToast('Tipo não encontrado', 'erro');
     return;
   }
-
-  let tamanho = '';
-  if (banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
-    tamanho = banco[tipo][item][versao].tamanho || '';
-  }
-
-  destaqueBobinaDetalhe = {
-    item: registro.item,
-    indexHistorico: indexHistorico
-  };
 
   abrirDetalhes(tipo);
 
   let campoBusca = document.getElementById('buscaDetalhes');
-  if (campoBusca) {
-    campoBusca.value = [
-      nomeCompletoTipo(tipo),
-      item,
-      versao,
-      tamanho,
-      registro.data || ''
-    ].filter(Boolean).join(' ');
-  }
-
+  if (campoBusca) campoBusca.value = "";
   atualizarDetalhes();
 
-  setTimeout(function() {
-    localizarBobinaNosDetalhes();
-  }, 80);
+  setTimeout(() => {
+    let partes = registro.item.split(" - V");
+    let idGrupo = "gp" + partes[0].replace(/[^a-zA-Z0-9]/g, '') + partes[1].replace(/[^a-zA-Z0-9]/g, '');
+    abrirGrupoDetalhePorId(idGrupo);
+
+    let digitalData = registro.data.replace(/[^0-9]/g, "");
+    let linha = document.getElementById("BOBINA-" + indexHistorico + "-" + digitalData);
+    if (linha) {
+      linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      linha.style.backgroundColor = '#fef3c7';
+      linha.style.outline = '3px solid #1e3a8a';
+      setTimeout(() => {
+        linha.style.backgroundColor = '';
+        linha.style.outline = '';
+      }, 5000);
+    } else {
+      mostrarToast("Bobina localizada, mas o filtro a escondeu", "erro");
+    }
+  }, 350);
 }
+
 function abrirGrupoDetalhePorId(idGrupo) {
   let linhas = document.querySelectorAll(`tr[data-grupo="${idGrupo}"]`);
   let principal = document.getElementById("principal-" + idGrupo);
@@ -1610,74 +1403,10 @@ function abrirGrupoDetalhePorId(idGrupo) {
   linhas.forEach(l => l.classList.remove('hidden'));
 }
 
-function localizarBobinaNosDetalhes() {
-  if (!destaqueBobinaDetalhe) return;
-  let partes = destaqueBobinaDetalhe.itemCompleto.split(" - V");
-  let item = partes[0], versao = partes[1];
-  let idGrupo = "gp" + item.replace(/[^a-zA-Z0-9]/g, '') + versao.replace(/[^a-zA-Z0-9]/g, '');
-  abrirGrupoDetalhePorId(idGrupo);
-  let linha = document.querySelector(`#detalhesTabela tr[data-index-historico="${destaqueBobinaDetalhe.indexHistorico}"]`);
-  if (linha) {
-    linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    linha.style.backgroundColor = '#fef3c7';
-    linha.style.outline = '2px solid #2563eb';
-    linha.style.outlineOffset = '-2px';
-    setTimeout(() => { linha.style.backgroundColor = ''; linha.style.outline = ''; linha.style.outlineOffset = ''; }, 4000);
-  }
-  destaqueBobinaDetalhe = null;
-}
-
-function irParaBobinaNosDetalhes(registro, indexHistorico) {
-  if (!registro || !registro.item) return;
-
-  // 1. Descobre o tipo (BRF, Tampas, etc)
-  let itemApenas = registro.item.split(" - ")[0].trim();
-  let tipo = descobrirTipoPorItem(itemApenas);
-
-  if (!tipo) {
-    mostrarToast('Tipo não encontrado', 'erro');
-    return;
-  }
-
-  // 2. Reconstrói a "Digital" (ID) da bobina alvo
-  let digitalData = registro.data.replace(/[^0-9]/g, "");
-  let idAlvo = "BOBINA-" + indexHistorico + "-" + digitalData;
-
-  // 3. Abre a tela de detalhes do tipo
-  abrirDetalhes(tipo);
-
-  // 4. Limpa a busca para a bobina estar visível no código
-  let campoBusca = document.getElementById('buscaDetalhes');
-  if (campoBusca) campoBusca.value = ""; 
-  atualizarDetalhes();
-
-  // 5. Localiza e destaca
-  setTimeout(() => {
-    // Abre o grupo "+"
-    let partes = registro.item.split(" - V");
-    let idGrupo = "gp" + partes[0].replace(/[^a-zA-Z0-9]/g, '') + partes[1].replace(/[^a-zA-Z0-9]/g, '');
-    abrirGrupoDetalhePorId(idGrupo);
-
-    // Rola e destaca
-    let linha = document.getElementById(idAlvo);
-    if (linha) {
-      linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      linha.style.backgroundColor = '#fef3c7'; // Amarelo
-      linha.style.outline = '3px solid #1e3a8a'; // Borda azul forte
-      
-      setTimeout(() => { 
-        linha.style.backgroundColor = ''; 
-        linha.style.outline = '';
-      }, 5000);
-    } else {
-        mostrarToast("Bobina localizada, mas o filtro a escondeu", "erro");
-    }
-  }, 350);
-}
 function atualizarDetalhes() {
   const tbody = document.getElementById('detalhesTabela');
   tbody.innerHTML = '';
-const termo = normalizarTexto(document.getElementById('buscaDetalhes').value);
+  const termo = normalizarTexto(document.getElementById('buscaDetalhes').value);
   let pesoTotalAcumulado = 0, totalBobinas = 0;
 
   let entradas = historico.filter(h => {
@@ -1728,38 +1457,21 @@ const termo = normalizarTexto(document.getElementById('buscaDetalhes').value);
   });
 
   let chavesOrdenadas = Object.keys(agrupado).filter(chave => {
-  let partes = chave.split(" - V");
-  let item = partes[0];
-  let versao = partes[1];
-  let tamanho = "";
-
-  if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][item] && banco[tipoDetalheAtual][item][versao]) {
-    tamanho = banco[tipoDetalheAtual][item][versao].tamanho;
-  }
-
-  let textoRegistros = agrupado[chave].registros.map(reg =>
-    [
-      reg.data || '',
-      reg.id || '',
-      reg.qtd || '',
-      reg.tipo || ''
-    ].join(' ')
-  ).join(' ');
-
-  let textoBusca = normalizarTexto([
-    tipoDetalheAtual,
-    nomeCompletoTipo(tipoDetalheAtual),
-    nomeBonitoTipo(tipoDetalheAtual),
-    item,
-    versao,
-    tamanho,
-    agrupado[chave].total,
-    agrupado[chave].registros.length,
-    textoRegistros
-  ].join(' '));
-
-  return textoBusca.includes(termo);
-});
+    let partes = chave.split(" - V");
+    let item = partes[0], versao = partes[1];
+    let tamanho = "";
+    if (banco[tipoDetalheAtual] && banco[tipoDetalheAtual][item] && banco[tipoDetalheAtual][item][versao]) {
+      tamanho = banco[tipoDetalheAtual][item][versao].tamanho;
+    }
+    let textoRegistros = agrupado[chave].registros.map(reg =>
+      [reg.data || '', reg.id || '', reg.qtd || '', reg.tipo || ''].join(' ')
+    ).join(' ');
+    let textoBusca = normalizarTexto([
+      tipoDetalheAtual, nomeCompletoTipo(tipoDetalheAtual), nomeBonitoTipo(tipoDetalheAtual),
+      item, versao, tamanho, agrupado[chave].total, agrupado[chave].registros.length, textoRegistros
+    ].join(' '));
+    return textoBusca.includes(termo);
+  });
 
   if (ordemDetalhes.coluna) {
     chavesOrdenadas.sort((a, b) => {
@@ -1817,11 +1529,8 @@ const termo = normalizarTexto(document.getElementById('buscaDetalhes').value);
         let trReg = document.createElement('tr');
         trReg.className = "detalhe-registro hidden" + (reg.consumida ? " bobina-consumida" : "");
         trReg.setAttribute('data-grupo', idLimpo);
-        
-        // GERA A DIGITAL ÚNICA (ID): Index + Data e Hora (apenas números)
         let digitalData = reg.data.replace(/[^0-9]/g, "");
-        trReg.id = "BOBINA-" + indexReal + "-" + digitalData; 
-
+        trReg.id = "BOBINA-" + indexReal + "-" + digitalData;
         trReg.innerHTML = `
           <td style="text-align:center;width:2ch;"><strong>${idx+1}</strong></td>
           <td colspan="2" style="text-align:center;font-size:11px;">${reg.data}</td>
@@ -1870,42 +1579,24 @@ function salvarUltimoBackupLocal(origem = 'manual') {
     dataBackup: new Date().toLocaleString(),
     origem: origem
   };
-
   localStorage.setItem('ultimoBackupLocal', JSON.stringify(dados));
 }
 
 window.restaurarUltimoBackup = function() {
   const salvo = localStorage.getItem('ultimoBackupLocal');
-
-  if (!salvo) {
-    mostrarToast('Nenhum backup local disponível', 'erro');
-    return;
-  }
-
+  if (!salvo) { mostrarToast('Nenhum backup local disponível', 'erro'); return; }
   try {
     const dados = JSON.parse(salvo);
-
-    if (!dados.estoque || !dados.historico || !dados.banco) {
-      mostrarToast('Backup local inválido', 'erro');
-      return;
-    }
-
-    if (!confirm(
-      "Restaurar o último backup salvo em " + (dados.dataBackup || "data desconhecida") + "?\n\n" +
-      "Isso substituirá os dados atuais."
-    )) return;
-
+    if (!dados.estoque || !dados.historico || !dados.banco) { mostrarToast('Backup local inválido', 'erro'); return; }
+    if (!confirm("Restaurar o último backup salvo em " + (dados.dataBackup || "data desconhecida") + "?\n\nIsso substituirá os dados atuais.")) return;
     salvarEstadoParaDesfazer();
-
     estoque = dados.estoque;
     historico = dados.historico;
     banco = dados.banco;
-
     salvarBanco();
     salvarDados();
     atualizarTudo();
     fecharModalConfig();
-
     mostrarToast('Último backup restaurado');
   } catch (e) {
     mostrarToast('Erro ao restaurar último backup', 'erro');
@@ -1914,20 +1605,12 @@ window.restaurarUltimoBackup = function() {
 
 function exportarBackup() {
   salvarUltimoBackupLocal('backup exportado manualmente');
-
-  const dados = {
-    estoque,
-    historico,
-    banco,
-    dataBackup: new Date().toLocaleString()
-  };
-
+  const dados = { estoque, historico, banco, etiquetasPendentes, dataBackup: new Date().toLocaleString() };
   const blob = new Blob([JSON.stringify(dados, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = "backup_estoque_" + getTimestamp() + ".json";
   link.click();
-
   mostrarToast('Backup exportado');
 }
 
@@ -1940,19 +1623,14 @@ function processarBackup(event) {
   leitor.onload = function (e) {
     try {
       const dados = JSON.parse(e.target.result);
-      if (!dados.estoque || !dados.historico) {
-        mostrarToast('Arquivo de backup inválido!', 'erro');
-        return;
-      }
+      if (!dados.estoque || !dados.historico) { mostrarToast('Arquivo de backup inválido!', 'erro'); return; }
       if (!confirm("Isso vai substituir TODOS os dados atuais pelo backup.\n\nData do backup: " + (dados.dataBackup || "desconhecida") + "\n\nDeseja continuar?")) return;
-            salvarUltimoBackupLocal('antes de restaurar backup importado');
-
+      salvarUltimoBackupLocal('antes de restaurar backup importado');
+      salvarEstadoParaDesfazer();
       estoque = dados.estoque;
       historico = dados.historico;
-      if (dados.banco) {
-        banco = dados.banco;
-        salvarBanco();
-      }
+      if (dados.banco) { banco = dados.banco; salvarBanco(); }
+      if (dados.etiquetasPendentes) { etiquetasPendentes = dados.etiquetasPendentes; salvarPendentes(); }
       salvarDados();
       atualizarTabela();
       atualizarHistorico();
@@ -1966,7 +1644,7 @@ function processarBackup(event) {
   event.target.value = "";
 }
 
-/* ================= LONG PRESS + MODAL OPÇÕES ================= */
+/* ================= LONG PRESS ================= */
 
 let longPressTimer = null;
 let opcaoAtual = { tipo: null, chave: null, indexHistorico: null };
@@ -2014,16 +1692,25 @@ function fecharModalOpcoes() {
 }
 
 function longPress(elemento, callback) {
-  elemento.addEventListener('touchstart', function(e) {
-    longPressTimer = setTimeout(function() { callback(); }, 500);
-  });
+  elemento.addEventListener('touchstart', function() { longPressTimer = setTimeout(callback, 500); });
   elemento.addEventListener('touchend', function() { clearTimeout(longPressTimer); });
   elemento.addEventListener('touchmove', function() { clearTimeout(longPressTimer); });
-  elemento.addEventListener('mousedown', function(e) {
-    longPressTimer = setTimeout(function() { callback(); }, 500);
-  });
+  elemento.addEventListener('mousedown', function() { longPressTimer = setTimeout(callback, 500); });
   elemento.addEventListener('mouseup', function() { clearTimeout(longPressTimer); });
   elemento.addEventListener('mouseleave', function() { clearTimeout(longPressTimer); });
+}
+
+function configurarLongPress(botao, callback, tempo = 3000) {
+  if (!botao) return;
+  let timer = null;
+  const iniciar = () => { timer = setTimeout(callback, tempo); };
+  const cancelar = () => { clearTimeout(timer); timer = null; };
+  botao.addEventListener('touchstart', iniciar);
+  botao.addEventListener('touchend', cancelar);
+  botao.addEventListener('touchmove', cancelar);
+  botao.addEventListener('mousedown', iniciar);
+  botao.addEventListener('mouseup', cancelar);
+  botao.addEventListener('mouseleave', cancelar);
 }
 
 /* ================= AÇÕES DO MODAL ================= */
@@ -2070,11 +1757,22 @@ function consumirBobina() {
       reg.consumida = true;
       if (estoque[opcaoAtual.chave]) {
         estoque[opcaoAtual.chave] -= reg.qtd;
-        if (estoque[opcaoAtual.chave] <= 0) { delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd']; }
-        else if (estoque[opcaoAtual.chave+'_qtd'] > 0) estoque[opcaoAtual.chave+'_qtd']--;
+        if (estoque[opcaoAtual.chave] <= 0) {
+          delete estoque[opcaoAtual.chave];
+          delete estoque[opcaoAtual.chave + '_qtd'];
+        } else if (estoque[opcaoAtual.chave + '_qtd'] > 0) {
+          estoque[opcaoAtual.chave + '_qtd']--;
+        }
       }
-      let regConsumo = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
-      historico.push(regConsumo);
+      historico.push({
+        id: crypto.randomUUID(),
+        data: new Date().toLocaleString(),
+        tipo: 'Consumo',
+        item: opcaoAtual.chave,
+        qtd: reg.qtd,
+        refEntradaId: reg.id,
+        refEntradaData: reg.data
+      });
       salvarDados(); atualizarTudo(); fecharModalOpcoes();
       mostrarToast('Bobina consumida');
     }
@@ -2096,9 +1794,22 @@ function consumirBobina() {
       entradas.forEach(h => {
         if (!h.consumida) {
           h.consumida = true;
-          if (estoque[opcaoAtual.chave]) { estoque[opcaoAtual.chave] -= h.qtd; if (estoque[opcaoAtual.chave] <= 0) delete estoque[opcaoAtual.chave]; }
-          let regConsumo = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
-          historico.push(regConsumo);
+          if (estoque[opcaoAtual.chave]) {
+            estoque[opcaoAtual.chave] -= h.qtd;
+            if (estoque[opcaoAtual.chave] <= 0) {
+              delete estoque[opcaoAtual.chave];
+              delete estoque[opcaoAtual.chave + '_qtd'];
+            }
+          }
+          historico.push({
+            id: crypto.randomUUID(),
+            data: new Date().toLocaleString(),
+            tipo: 'Consumo',
+            item: opcaoAtual.chave,
+            qtd: h.qtd,
+            refEntradaId: h.id,
+            refEntradaData: h.data
+          });
         }
       });
       salvarDados(); atualizarTudo(); fecharModalOpcoes();
@@ -2106,8 +1817,6 @@ function consumirBobina() {
     }
   }
 }
-
-/* ================= EXCLUIR BOBINA ================= */
 
 window.excluirBobina = function() {
   salvarEstadoParaDesfazer();
@@ -2117,28 +1826,44 @@ window.excluirBobina = function() {
     if (!reg) return;
     if (!reg.consumida && estoque[opcaoAtual.chave]) {
       estoque[opcaoAtual.chave] -= reg.qtd;
-      if (estoque[opcaoAtual.chave+'_qtd'] > 0) estoque[opcaoAtual.chave+'_qtd']--;
-      if (estoque[opcaoAtual.chave] <= 0) { delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd']; }
+      if (estoque[opcaoAtual.chave + '_qtd'] > 0) estoque[opcaoAtual.chave + '_qtd']--;
+      if (estoque[opcaoAtual.chave] <= 0) {
+        delete estoque[opcaoAtual.chave];
+        delete estoque[opcaoAtual.chave + '_qtd'];
+      }
     }
     reg._removidaEstoque = true;
-    let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data };
-    historico.push(regExclusao);
+    historico.push({
+      id: crypto.randomUUID(),
+      data: new Date().toLocaleString(),
+      tipo: 'Exclusão',
+      item: opcaoAtual.chave,
+      qtd: reg.qtd,
+      refEntradaId: reg.id,
+      refEntradaData: reg.data
+    });
     salvarDados(); atualizarTudo(); fecharModalOpcoes();
     mostrarToast('Bobina excluída');
   } else if (opcaoAtual.tipo === 'item') {
     if (!confirm("Remover TODAS as bobinas de " + opcaoAtual.chave + "?")) return;
     historico.filter(h => h.item===opcaoAtual.chave && h.tipo==="Entrada" && !h.consumida && !h._removidaEstoque).forEach(h => {
       h._removidaEstoque = true;
-      let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
-      historico.push(regExclusao);
+      historico.push({
+        id: crypto.randomUUID(),
+        data: new Date().toLocaleString(),
+        tipo: 'Exclusão',
+        item: opcaoAtual.chave,
+        qtd: h.qtd,
+        refEntradaId: h.id,
+        refEntradaData: h.data
+      });
     });
-    delete estoque[opcaoAtual.chave]; delete estoque[opcaoAtual.chave+'_qtd'];
+    delete estoque[opcaoAtual.chave];
+    delete estoque[opcaoAtual.chave + '_qtd'];
     salvarDados(); atualizarTudo(); fecharModalOpcoes();
     mostrarToast('Bobinas excluídas');
   }
-}
-
-/* ================= EXCLUIR CONSUMIDAS ================= */
+};
 
 window.excluirConsumidas = function() {
   salvarEstadoParaDesfazer();
@@ -2146,13 +1871,20 @@ window.excluirConsumidas = function() {
   historico.forEach(h => {
     if (h.item===opcaoAtual.chave && h.tipo==="Entrada" && h.consumida && !h._removidaEstoque) {
       h._removidaEstoque = true;
-      let regExclusao = { id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: opcaoAtual.chave, qtd: h.qtd, refEntradaId: h.id, refEntradaData: h.data };
-      historico.push(regExclusao);
+      historico.push({
+        id: crypto.randomUUID(),
+        data: new Date().toLocaleString(),
+        tipo: 'Exclusão',
+        item: opcaoAtual.chave,
+        qtd: h.qtd,
+        refEntradaId: h.id,
+        refEntradaData: h.data
+      });
     }
   });
   salvarDados(); atualizarTudo(); fecharModalOpcoes();
   mostrarToast('Consumidas excluídas');
-}
+};
 
 /* ================= ATUALIZAR TUDO ================= */
 
@@ -2166,7 +1898,11 @@ function atualizarTudo() {
     gruposAbertos.forEach(id => {
       let linhas = document.querySelectorAll(`tr[data-grupo="${id}"]`);
       let principal = document.getElementById("principal-" + id);
-      if (principal) { principal.classList.add('grupo-aberto'); let btn = principal.querySelector('.btn-expandir-detalhe'); if (btn) btn.textContent = "−"; }
+      if (principal) {
+        principal.classList.add('grupo-aberto');
+        let btn = principal.querySelector('.btn-expandir-detalhe');
+        if (btn) btn.textContent = "−";
+      }
       linhas.forEach(l => l.classList.remove('hidden'));
     });
   }
@@ -2183,7 +1919,6 @@ function abrirModalSaida(identificador, pesoSaida) {
   saidaAtual.pesoRestante = pesoSaida;
   saidaAtual.descontos = {};
   saidaAtual.zeradas = [];
-
   let entradas = historico.filter(h => h.item === identificador && h.tipo === "Entrada" && !h.consumida);
   let pesoAtual = estoque[identificador] || 0;
   let bobinas = [], soma = 0;
@@ -2200,7 +1935,6 @@ function abrirModalSaida(identificador, pesoSaida) {
 
 function renderizarBobinasSaida() {
   let tbody = document.getElementById('modalSaidaBody');
-  tbody.innerHTML = '';
   let html = '';
   saidaAtual.bobinas.forEach((bob, idx) => {
     let indexReal = historico.indexOf(bob);
@@ -2286,14 +2020,12 @@ function finalizarSaida() {
     let indexReal = parseInt(idx);
     if (!saidaAtual.zeradas.includes(indexReal)) pesoDescontadoParcial += saidaAtual.descontos[indexReal];
   });
-
   let partesMsg = saidaAtual.identificador.split(" - V");
   let itemNome = partesMsg[0], versaoNome = partesMsg[1];
   let mensagemFinal = "";
   bobsConsumidas.forEach(idx => { let bob = historico[idx]; if (bob) mensagemFinal += "Bobina consumida (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n"; });
   bobsExcluidas.forEach(idx => { let bob = historico[idx]; if (bob) mensagemFinal += "Bobina excluída (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n"; });
   if (pesoDescontadoParcial > 0) mensagemFinal += "Removido " + Math.round(pesoDescontadoParcial) + "kg (" + itemNome + ", V" + versaoNome + ")";
-
   if (estoque[saidaAtual.identificador]) {
     estoque[saidaAtual.identificador] -= totalDescontado;
     let qtdKey = saidaAtual.identificador + '_qtd';
@@ -2301,23 +2033,23 @@ function finalizarSaida() {
       estoque[qtdKey] -= saidaAtual.zeradas.length;
       if (estoque[qtdKey] < 0) estoque[qtdKey] = 0;
     }
-    if (estoque[saidaAtual.identificador] <= 0) { delete estoque[saidaAtual.identificador]; delete estoque[qtdKey]; }
+    if (estoque[saidaAtual.identificador] <= 0) {
+      delete estoque[saidaAtual.identificador];
+      delete estoque[qtdKey];
+    }
   }
-
   Object.keys(saidaAtual.descontos).forEach(idx => {
     let indexReal = parseInt(idx);
     if (!saidaAtual.zeradas.includes(indexReal)) historico[indexReal].qtd -= saidaAtual.descontos[indexReal];
   });
-
   bobsConsumidas.forEach(idx => {
     let bob = historico[idx];
     if (bob) {
       bob.consumida = true;
-      historico.push({ id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
+      historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Consumo', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
       delete bob._consumir;
     }
   });
-
   if (pesoDescontadoParcial > 0) {
     let pesoOriginalParcial = 0, refEntradaId = null, refEntradaData = null;
     Object.keys(saidaAtual.descontos).forEach(idx => {
@@ -2328,24 +2060,24 @@ function finalizarSaida() {
         refEntradaData = historico[indexReal].data || null;
       }
     });
-    historico.push({ id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Consumo parcial', item: saidaAtual.identificador, qtd: pesoDescontadoParcial, qtdOriginal: pesoOriginalParcial, refEntradaId, refEntradaData });
+    historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Consumo parcial', item: saidaAtual.identificador, qtd: pesoDescontadoParcial, qtdOriginal: pesoOriginalParcial, refEntradaId, refEntradaData });
   }
-
   bobsExcluidas.forEach(idx => {
     let bob = historico[idx];
     if (bob) {
       bob._removidaEstoque = true;
-      historico.push({ id: Date.now()+Math.random(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
+      historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
       delete bob._excluir;
     }
   });
-
-  for (let i = historico.length-1; i >= 0; i--) {
-    if (historico[i]._excluir) historico.splice(i, 1);
-    if (historico[i] && historico[i]._consumir) delete historico[i]._consumir;
+  for (let i = historico.length - 1; i >= 0; i--) {
+    if (!historico[i]) continue;
+    if (historico[i]._excluir) { historico.splice(i, 1); continue; }
+    if (historico[i]._consumir) delete historico[i]._consumir;
   }
-
-  salvarDados(); atualizarTabela(); atualizarHistorico();
+  salvarDados();
+  atualizarTabela();
+  atualizarHistorico();
   document.getElementById('modalSaida').classList.add('hidden');
   tipoSelect.value = '';
   itemSelect.innerHTML = '<option value="">Selecionar item</option>';
@@ -2355,10 +2087,7 @@ function finalizarSaida() {
   if(saldoAtual) saldoAtual.innerHTML = "";
   if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
   mostrarToast('Saída aplicada');
-
-  setTimeout(function() {
-    if (mensagemFinal) alert(mensagemFinal);
-  }, 150);
+  setTimeout(function() { if (mensagemFinal) alert(mensagemFinal); }, 150);
 }
 
 function cancelarSaida() {
@@ -2368,23 +2097,8 @@ function cancelarSaida() {
 
 /* ================= LONG PRESS LIMPAR TUDO ================= */
 
-function configurarLongPress(botao, callback, tempo = 3000) {
-  if (!botao) return;
-  let timer = null;
-  const iniciar = () => { timer = setTimeout(callback, tempo); };
-  const cancelar = () => { clearTimeout(timer); timer = null; };
-  botao.addEventListener('touchstart', iniciar);
-  botao.addEventListener('touchend', cancelar);
-  botao.addEventListener('touchmove', cancelar);
-  botao.addEventListener('mousedown', iniciar);
-  botao.addEventListener('mouseup', cancelar);
-  botao.addEventListener('mouseleave', cancelar);
-}
-
 document.addEventListener("DOMContentLoaded", function() {
-
-  let btnEstoque = document.getElementById('btnLimparEstoque');
-  configurarLongPress(btnEstoque, function() {
+  configurarLongPress(document.getElementById('btnLimparEstoque'), function() {
     if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o estoque?\n\nAs exclusões serão registradas no histórico.")) return;
     salvarEstadoParaDesfazer();
     let alterou = excluirTodoEstoqueComHistorico();
@@ -2397,17 +2111,16 @@ document.addEventListener("DOMContentLoaded", function() {
     else mostrarToast('Nenhum item no estoque', 'erro');
   });
 
-  let btnHistorico = document.getElementById('btnLimparHistorico');
-  configurarLongPress(btnHistorico, function() {
+  configurarLongPress(document.getElementById('btnLimparHistorico'), function() {
     if (!confirm("⚠️ ATENÇÃO!\n\nDeseja limpar o histórico?\n\nRegistros de bobinas que ainda estão no estoque serão mantidos.")) return;
     historico = historico.filter(h => h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque && estoque[h.item] > 0);
-    salvarDados(); atualizarHistorico();
+    salvarDados();
+    atualizarHistorico();
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
     mostrarToast('Histórico limpo');
   });
 
-  let btnDetalhes = document.getElementById('btnLimparDetalhes');
-  configurarLongPress(btnDetalhes, function() {
+  configurarLongPress(document.getElementById('btnLimparDetalhes'), function() {
     if (!tipoDetalheAtual) return;
     let nomeTipo = nomeCompletoTipo(tipoDetalheAtual);
     if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir todo o estoque de " + nomeTipo + "?\n\nAs exclusões serão registradas no histórico.")) return;
@@ -2423,30 +2136,42 @@ document.addEventListener("DOMContentLoaded", function() {
   });
 
   let btnLimparFiltro = document.getElementById("btnLimparFiltro");
-  if(btnLimparFiltro){
-    btnLimparFiltro.addEventListener("click", function(){
+  if (btnLimparFiltro) {
+    btnLimparFiltro.addEventListener("click", function() {
       document.getElementById("dataInicio").value = "";
       document.getElementById("dataFim").value = "";
       document.getElementById("buscaHistorico").value = "";
       atualizarHistorico();
     });
   }
+
+  let modalGer = document.getElementById('modalGerador');
+  if (modalGer) {
+    modalGer.addEventListener('click', function(e) {
+      if (e.target === this) geradorFecharSimples();
+    });
+  }
+
+  let modalPend = document.getElementById('modalPendentes');
+  if (modalPend) {
+    modalPend.addEventListener('click', function(e) {
+      if (e.target === this) fecharPendentes();
+    });
+  }
 });
 
 /* ================= REMOVER HISTÓRICO ================= */
 
-window.removerHistorico = function(i){
+window.removerHistorico = function(i) {
   let registro = historico[i];
   if (!registro) return;
-
   if (registro.tipo === "Entrada" && !registro.consumida && !registro._removidaEstoque && estoque[registro.item] && estoque[registro.item] > 0) {
     if (confirm("❌ Não é permitido excluir uma entrada ativa no estoque.\n\nDeseja localizar esta bobina nos detalhes do tipo?")) {
       irParaBobinaNosDetalhes(registro, i);
     }
     return;
   }
-
-  if(!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
+  if (!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
   salvarEstadoParaDesfazer();
   historico.splice(i, 1);
   salvarDados();
@@ -2456,48 +2181,85 @@ window.removerHistorico = function(i){
 
 /* ================= MENU CONFIGURAÇÕES ================= */
 
-window.abrirModalConfig = function() {
+function configOcultarTodasAsTelas() {
+  ['configMenuPrincipal', 'configTelaExportar', 'configTelaBackup', 'configTelaCadastro'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add('hidden');
+    el.style.display = 'none';
+  });
+}
+
+function configMostrarTela(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('hidden');
+  el.style.display = 'flex';
+  el.style.flexDirection = 'column';
+  el.style.gap = '8px';
+}
+
+function abrirModalConfig() {
+  const modal = document.getElementById('modalConfig');
+  if (!modal) return;
+  modal.removeAttribute('style');
+  modal.classList.remove('hidden');
   voltarConfigPrincipal();
-  document.getElementById('modalConfig').classList.remove('hidden');
-};
+}
 
-window.fecharModalConfig = function() {
-  document.getElementById('modalConfig').classList.add('hidden');
-};
+function fecharModalConfig() {
+  const modal = document.getElementById('modalConfig');
+  if (!modal) return;
+  modal.classList.add('hidden');
+}
 
-window.voltarConfigPrincipal = function() {
-  document.getElementById('configTitulo').textContent = 'Configurações';
-  document.getElementById('configMenuPrincipal').classList.remove('hidden');
-  document.getElementById('configTelaExportar').classList.add('hidden');
-  document.getElementById('configTelaBackup').classList.add('hidden');
-  document.getElementById('configTelaCadastro').classList.add('hidden');
-};
+function voltarConfigPrincipal() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Configurações';
 
-window.abrirConfigExportar = function() {
-  document.getElementById('configTitulo').textContent = 'Exportar dados';
-  document.getElementById('configMenuPrincipal').classList.add('hidden');
-  document.getElementById('configTelaExportar').classList.remove('hidden');
-};
+  configOcultarTodasAsTelas();
+  configMostrarTela('configMenuPrincipal');
+}
 
-window.abrirConfigBackup = function() {
-  document.getElementById('configTitulo').textContent = 'Backup / Restaurar';
-  document.getElementById('configMenuPrincipal').classList.add('hidden');
-  document.getElementById('configTelaBackup').classList.remove('hidden');
-};
+function abrirConfigExportar() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Exportar dados';
 
-window.alternarModoEscuro = function() {
+  configOcultarTodasAsTelas();
+  configMostrarTela('configTelaExportar');
+
+  if (typeof resetarMenuExportar === 'function') resetarMenuExportar();
+}
+
+function abrirConfigBackup() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Backup / Restaurar';
+
+  configOcultarTodasAsTelas();
+  configMostrarTela('configTelaBackup');
+}
+
+function abrirConfigCadastro() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Gerenciar cadastro';
+
+  configOcultarTodasAsTelas();
+  configMostrarTela('configTelaCadastro');
+
+  if (typeof renderizarCadastro === 'function') renderizarCadastro();
+}
+
+function alternarModoEscuro() {
   document.body.classList.toggle('dark-mode');
   let ativo = document.body.classList.contains('dark-mode');
   localStorage.setItem('modoEscuro', ativo);
 
-  // Atualiza o toggle
   let toggle = document.getElementById('darkModeToggle');
   if (toggle) toggle.checked = ativo;
 
-  // Atualiza o ícone
   let icone = document.getElementById('darkModeIcon');
   if (icone) icone.textContent = ativo ? '☀️' : '🌙';
-};
+}
 
 /* ================= SISTEMA DE DESFAZER / REFAZER ================= */
 
@@ -2566,6 +2328,8 @@ function atualizarBotoesDesfazerRefazer() {
 window.abrirConfigCadastro = function() {
   document.getElementById('configTitulo').textContent = 'Gerenciar cadastro';
   document.getElementById('configMenuPrincipal').classList.add('hidden');
+  document.getElementById('configTelaExportar').classList.add('hidden');
+  document.getElementById('configTelaBackup').classList.add('hidden');
   document.getElementById('configTelaCadastro').classList.remove('hidden');
   renderizarCadastro();
 };
@@ -2729,8 +2493,7 @@ window.adicionarVersao = function(tipo, item) {
   if (banco[tipo][item][versao]) { mostrarToast('Esta versão já existe!', 'erro'); return; }
   let tamanho = prompt("Medidas (ex: 66 x 60):");
   if (!tamanho || !tamanho.trim()) return;
-  tamanho = tamanho.trim();
-  banco[tipo][item][versao] = { tamanho: tamanho };
+  banco[tipo][item][versao] = { tamanho: tamanho.trim() };
   salvarBanco();
   renderizarCadastro();
   mostrarToast('Versão adicionada');
@@ -2748,8 +2511,7 @@ window.editarVersao = function(tipo, item, versao) {
     if (banco[tipo][item][novaVersao]) { mostrarToast('Já existe uma versão com este número!', 'erro'); return; }
     let chaveAntiga = item + " - V" + versao;
     let chaveNova = item + " - V" + novaVersao;
-    let temEstoque = estoque[chaveAntiga] !== undefined;
-    if (temEstoque) {
+    if (estoque[chaveAntiga] !== undefined) {
       if (!confirm("Esta versão possui entradas no estoque.\n\nAs chaves serão atualizadas.\n\nDeseja continuar?")) return;
       estoque[chaveNova] = estoque[chaveAntiga];
       delete estoque[chaveAntiga];
@@ -2784,43 +2546,23 @@ window.removerVersao = function(tipo, item, versao) {
   mostrarToast('Versão excluída');
 };
 
-function criarSnapshotEstado() {
-  return {
-    estoque: JSON.parse(JSON.stringify(estoque)),
-    historico: JSON.parse(JSON.stringify(historico))
-  };
-}
-
-function restaurarSnapshotEstado(snapshot) {
-  estoque = JSON.parse(JSON.stringify(snapshot.estoque));
-  historico = JSON.parse(JSON.stringify(snapshot.historico));
-  salvarDados();
-  atualizarTabela();
-  atualizarHistorico();
-  if (tipoDetalheAtual) atualizarDetalhes();
-}
+/* ================= QR CODE ================= */
 
 function gerarQRBobina(index) {
   let reg = historico[index];
   if (!reg || reg.tipo !== "Entrada") return;
 
   let partes = reg.item.split(" - V");
-  let item = partes[0];
-  let versao = partes[1];
+  let item = partes[0], versao = partes[1];
   let tipo = "";
-
-  Object.keys(banco).forEach(t => {
-    if (banco[t] && banco[t][item]) tipo = t;
-  });
+  Object.keys(banco).forEach(t => { if (banco[t] && banco[t][item]) tipo = t; });
 
   let tamanho = "";
   if (tipo && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
     tamanho = banco[tipo][item][versao].tamanho;
   }
 
-  // Monta data no formato ddmmaaaa/hhmmss
-  let dataQR = "";
-  let dataProducao = "";
+  let dataQR = "", dataProducao = "";
   if (reg.data) {
     let partesData = reg.data.split(", ");
     if (partesData.length === 2) {
@@ -2833,14 +2575,17 @@ function gerarQRBobina(index) {
     }
   }
 
-  // Formato simplificado: item/versao/peso/ddmmaaaa/hhmmss
+  let idCurto = '';
+  if (reg.id && typeof reg.id === 'string' && reg.id.includes('-')) {
+    idCurto = reg.id.replace(/-/g, '').substring(0, 8);
+  }
+
   let conteudoQR = item + "/" + versao + "/" + Math.round(reg.qtd);
   if (dataQR) conteudoQR += "/" + dataQR;
+  if (idCurto) conteudoQR += "/" + idCurto;
 
-  // Limpa container
   document.getElementById("qrContainer").innerHTML = "";
 
-  // Gera QR
   new QRCode(document.getElementById("qrContainer"), {
     text: conteudoQR,
     width: 200,
@@ -2850,7 +2595,6 @@ function gerarQRBobina(index) {
     correctLevel: QRCode.CorrectLevel.M
   });
 
-  // Info abaixo do QR
   let infoDiv = document.createElement("div");
   infoDiv.className = "qr-info";
   infoDiv.innerHTML = `
@@ -2858,10 +2602,8 @@ function gerarQRBobina(index) {
     <div>${tamanho}</div>
     <div>${Math.round(reg.qtd)} kg</div>
     <div style="font-size:11px; color:#94a3b8;">Produção: ${dataProducao || '-'}</div>
-    <div style="font-size:10px; color:#cbd5e1; margin-top:2px;">${conteudoQR}</div>
   `;
   document.getElementById("qrContainer").appendChild(infoDiv);
-
   document.getElementById("modalQR").classList.remove("hidden");
 }
 
@@ -2870,17 +2612,9 @@ let historicoSelecionadoIndex = null;
 function abrirAcoesHistorico(index) {
   let reg = historico[index];
   if (!reg) return;
-
   historicoSelecionadoIndex = index;
-
-  let titulo = document.getElementById("modalHistoricoTitulo");
-  let btnQR = document.getElementById("btnHistoricoQR");
-
-  titulo.textContent = reg.item || "Ações do registro";
-
-  // QR só aparece para entrada
-  btnQR.style.display = (reg.tipo === "Entrada") ? "block" : "none";
-
+  document.getElementById("modalHistoricoTitulo").textContent = reg.item || "Ações do registro";
+  document.getElementById("btnHistoricoQR").style.display = (reg.tipo === "Entrada") ? "block" : "none";
   document.getElementById("modalHistoricoAcoes").classList.remove("hidden");
 }
 
@@ -2903,6 +2637,13 @@ function confirmarRemoverHistoricoSelecionado() {
   removerHistorico(idx);
 }
 
+function fecharModalQR() {
+  document.getElementById("modalQR").classList.add("hidden");
+  document.getElementById("qrContainer").innerHTML = "";
+}
+
+/* ================= SCANNER QR ================= */
+
 let leitorQR = null;
 let leitorQRAberto = false;
 let scannerProcessando = false;
@@ -2916,9 +2657,7 @@ async function fecharTodosScanners() {
       leitorQR = null;
       leitorQRAberto = false;
     }
-  } catch (e) {
-    console.warn("Erro ao fechar scanner single:", e);
-  }
+  } catch (e) { console.warn("Erro ao fechar scanner single:", e); }
   try {
     if (leitorContinuo && leitorContinuoAberto) {
       await leitorContinuo.stop();
@@ -2926,27 +2665,19 @@ async function fecharTodosScanners() {
       leitorContinuo = null;
       leitorContinuoAberto = false;
     }
-  } catch (e) {
-    console.warn("Erro ao fechar scanner contínuo:", e);
-  }
+  } catch (e) { console.warn("Erro ao fechar scanner contínuo:", e); }
 }
 
 async function abrirScannerQR() {
   try {
     await fecharTodosScanners();
-
     document.getElementById("modalScannerQR").classList.remove("hidden");
     document.getElementById("scannerStatus").textContent = "Aponte a câmera para o QR da bobina";
     document.getElementById("reader").innerHTML = "";
-
     leitorQR = new Html5Qrcode("reader");
-
     await leitorQR.start(
       { facingMode: "environment" },
-      {
-        fps: 10,
-        qrbox: { width: 220, height: 220 }
-      },
+      { fps: 10, qrbox: { width: 220, height: 220 } },
       async (decodedText) => {
         if (scannerProcessando) return;
         scannerProcessando = true;
@@ -2954,7 +2685,6 @@ async function abrirScannerQR() {
       },
       () => {}
     );
-
     leitorQRAberto = true;
   } catch (erro) {
     console.error("Erro ao abrir scanner QR:", erro);
@@ -2969,48 +2699,73 @@ async function fecharScannerQR() {
       await leitorQR.stop();
       await leitorQR.clear();
     }
-  } catch (e) {
-    console.warn("Erro ao fechar scanner:", e);
-  }
-
+  } catch (e) { console.warn("Erro ao fechar scanner:", e); }
   leitorQR = null;
   leitorQRAberto = false;
   scannerProcessando = false;
-
   const modal = document.getElementById("modalScannerQR");
   if (modal) modal.classList.add("hidden");
-
   const reader = document.getElementById("reader");
   if (reader) reader.innerHTML = "";
 }
 
 async function processarLeituraQR(textoLido) {
   let dados = null;
-
-  // Tenta JSON primeiro (formato antigo)
-  try {
-    dados = JSON.parse(textoLido);
-  } catch (e) {
-    // Não é JSON, tenta formato simplificado
-    dados = interpretarQRSimplificado(textoLido);
-  }
-
+  try { dados = JSON.parse(textoLido); }
+  catch (e) { dados = interpretarQRSimplificado(textoLido); }
   if (!dados) {
     await fecharScannerQR();
     mostrarToast("QR inválido ou fora do padrão", "erro");
     return;
   }
-
   let registroEncontrado = localizarRegistroPorQR(dados);
-
   await fecharScannerQR();
-
   mostrarResultadoQR(dados, registroEncontrado);
   scannerProcessando = false;
 }
 
+function interpretarQRSimplificado(texto) {
+  if (!texto || !texto.includes("/")) return null;
+  let partes = texto.split("/");
+if (partes[0] === 'BOB') partes.shift();
+  if (partes.length < 3) return null;
+  let item = partes[0], versao = partes[1];
+  let peso = parseFloat(partes[2]);
+  if (!item || !versao || isNaN(peso) || peso <= 0) return null;
+
+  let dataFormatada = "", dataBruta = "";
+  if (partes.length >= 5) {
+    let d = partes[3], h = partes[4];
+    if (h.length === 4) h = h + "00";
+    if (d.length === 8 && h.length === 6) {
+      dataFormatada = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
+        ", " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+      dataBruta = d + "/" + h;
+    }
+  }
+
+  let idUnico = texto;
+  if (partes.length >= 5 && partes[4].length === 4) {
+    idUnico = partes[0] + "/" + partes[1] + "/" + partes[2] + "/" + partes[3] + "/" + partes[4] + "00";
+  }
+
+  let bobinaId = null;
+  let ultimaParte = partes[partes.length - 1];
+  if (ultimaParte && ultimaParte.length === 8 && /^[a-f0-9]+$/i.test(ultimaParte)) {
+    bobinaId = ultimaParte;
+  }
+
+  return {
+    id: idUnico,
+    bobinaId: bobinaId,
+    tipo: descobrirTipoPorItem(item),
+    item, versao, peso,
+    data: dataFormatada,
+    dataBruta: dataBruta
+  };
+}
+
 function localizarRegistroPorQR(dados) {
-  // Monta o QR simplificado a partir dos dados lidos
   let qrLido = dados.item + "/" + dados.versao + "/" + Math.round(parseFloat(dados.peso));
   if (dados.data) {
     let partesData = dados.data.split(", ");
@@ -3026,12 +2781,12 @@ function localizarRegistroPorQR(dados) {
   return historico.find(h => {
     if (!h || h.tipo !== "Entrada") return false;
     if (!h.item || !h.item.includes(" - V")) return false;
-
+    if (dados.bobinaId && h.id && typeof h.id === 'string' && h.id.includes('-')) {
+      let idCurto = h.id.replace(/-/g, '').substring(0, 8);
+      if (idCurto === dados.bobinaId) return true;
+    }
     let partes = h.item.split(" - V");
-    let item = partes[0];
-    let versao = partes[1];
-
-    // Reconstrói o QR simplificado da entrada do histórico
+    let item = partes[0], versao = partes[1];
     let qrDoHistorico = item + "/" + versao + "/" + Math.round(h.qtd);
     if (h.data) {
       let partesDataH = h.data.split(", ");
@@ -3043,33 +2798,24 @@ function localizarRegistroPorQR(dados) {
         }
       }
     }
-
-    // Compara QR completo reconstruído
     if (qrLido === qrDoHistorico) return true;
-
-    // Compara id direto (se o id salvo é o próprio QR simplificado)
     let idHist = String(h.id || "");
     let idDados = String(dados.id || "");
     if (idDados && idHist === idDados) return true;
-
     return false;
   }) || null;
 }
 
 function mostrarResultadoQR(dados, registro) {
   qrLidoAtual = { dados, registro };
-
-  // 1. Descobre o tipo e verifica se existe no cadastro
   let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
   let itemExiste = tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)];
 
-  // 2. Extrai a data de produção do QR
   let etiquetaData = "-";
   if (dados.id && dados.id.includes("/")) {
     let partesId = dados.id.split("/");
     if (partesId.length >= 5) {
-      let d = partesId[3];
-      let h = partesId[4];
+      let d = partesId[3], h = partesId[4];
       if (h.length === 4) h = h + "00";
       if (d.length === 8 && h.length === 6) {
         etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
@@ -3087,12 +2833,8 @@ function mostrarResultadoQR(dados, registro) {
     }
   }
 
-  // 3. Define o Status (agora verificando o cadastro primeiro)
-  let status = "";
-  let statusTipo = "";
-
+  let status = "", statusTipo = "";
   if (!itemExiste) {
-    // ERRO: Item ou versão não existe no banco de dados
     status = `<div style="margin-top:8px; color:#dc2626;"><strong>❌ Erro:</strong> Item ou versão não cadastrado</div>
               <div style="margin-top:4px; padding:6px 10px; background:#fee2e2; border-radius:6px; color:#991b1b; font-size:13px; font-weight:600;">
                 ⚠️ Cadastre este item em "Gerenciar cadastro" antes de movimentá-lo.
@@ -3100,10 +2842,10 @@ function mostrarResultadoQR(dados, registro) {
     statusTipo = "erro_cadastro";
   } else if (registro) {
     if (registro._removidaEstoque) {
-      status = `<div style="margin-top:8px; color:#dc2626;"><strong>⚠️ Status:</strong> excluída do estoque</div>`;
+      status = `<div style="margin-top:8px; color:#dc2626;"><strong>🚫 Status:</strong> Bobina excluída</div>`;
       statusTipo = "excluida";
     } else if (registro.consumida) {
-      status = `<div style="margin-top:8px; color:#ca8a04;"><strong>⚠️ Status:</strong> consumida</div>`;
+      status = `<div style="margin-top:8px; color:#ca8a04;"><strong>⚠️ Status:</strong> Bobina consumida</div>`;
       statusTipo = "consumida";
     } else {
       status = `<div style="margin-top:8px; color:#16a34a;"><strong>✅ Status:</strong> ativa no estoque</div>
@@ -3117,8 +2859,7 @@ function mostrarResultadoQR(dados, registro) {
     statusTipo = "nova";
   }
 
-  // 4. Monta o HTML na nova ordem solicitada
-  let html = `
+  document.getElementById("resultadoQRConteudo").innerHTML = `
     <div><strong>Tipo:</strong> ${tipo ? nomeCompletoTipo(tipo) : '<span style="color:#dc2626">Desconhecido</span>'}</div>
     <div><strong>Item:</strong> ${dados.item || '-'}</div>
     <div><strong>Versão:</strong> ${dados.versao || '-'}</div>
@@ -3127,23 +2868,14 @@ function mostrarResultadoQR(dados, registro) {
     ${status}
   `;
 
-  document.getElementById("resultadoQRConteudo").innerHTML = html;
-
-  // 5. Exibe os botões baseados no status
   let btnUsar = document.getElementById("btnUsarQRMov");
   let btnEntradaRapida = document.getElementById("btnEntradaRapidaQR");
   let btnConsumir = document.getElementById("btnConsumirQR");
   let btnDesmarcar = document.getElementById("btnDesmarcarQR");
   let btnExcluir = document.getElementById("btnExcluirQR");
 
-  // Esconde todos inicialmente
-  if (btnUsar) btnUsar.style.display = "none";
-  if (btnEntradaRapida) btnEntradaRapida.style.display = "none";
-  if (btnConsumir) btnConsumir.style.display = "none";
-  if (btnDesmarcar) btnDesmarcar.style.display = "none";
-  if (btnExcluir) btnExcluir.style.display = "none";
+  [btnUsar, btnEntradaRapida, btnConsumir, btnDesmarcar, btnExcluir].forEach(b => { if (b) b.style.display = "none"; });
 
-  // Só mostra botões se o item existir
   if (itemExiste) {
     if (statusTipo === "nova") {
       if (btnUsar) btnUsar.style.display = "block";
@@ -3162,225 +2894,108 @@ function mostrarResultadoQR(dados, registro) {
 
 function usarQRNaMovimentacao() {
   if (!qrLidoAtual || !qrLidoAtual.dados) return;
-
   let dados = qrLidoAtual.dados;
   let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
-  let item = dados.item;
-  let versao = String(dados.versao);
-  let peso = dados.peso;
-
+  let item = dados.item, versao = String(dados.versao), peso = dados.peso;
   if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
     mostrarToast("Item do QR não encontrado no cadastro", "erro");
     return;
   }
-
-  // Preenche tipo
   tipoSelect.value = tipo;
   filtrarPorTipo();
-
-  // Preenche item
   itemSelect.value = item;
   itemSelect.dispatchEvent(new Event("change"));
-
-  // Preenche versão
   versaoSelect.value = versao;
   atualizarSaldoAtual(item, versao);
-
-  // Preenche busca manual
   let tamanho = banco[tipo][item][versao].tamanho || "";
   document.getElementById("buscaItem").value = item + " - V" + versao + " (" + tamanho + ")";
-
-  // Preenche peso
   quantidade.value = peso || "";
-
-  // Garante que está na tela de movimentação
   mostrarTela("movimentar");
-
   fecharResultadoQR();
-
-  // Se tem peso, foca no botão de ação. Se não, foca no campo peso
-  if (peso) {
-    mostrarToast("Dados carregados pelo QR");
-  } else {
-    quantidade.focus();
-    mostrarToast("Item carregado — informe o peso");
-  }
+  if (peso) mostrarToast("Dados carregados pelo QR");
+  else { quantidade.focus(); mostrarToast("Item carregado — informe o peso"); }
 }
 
 function entradaRapidaQR() {
   if (!qrLidoAtual || !qrLidoAtual.dados) return;
-
   let dados = qrLidoAtual.dados;
   let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
-  let item = dados.item;
-  let versao = String(dados.versao);
+  let item = dados.item, versao = String(dados.versao);
   let peso = parseFloat(dados.peso);
-
   if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
     mostrarToast("Item não encontrado no cadastro", "erro");
     return;
   }
-
-  if (!peso || peso <= 0) {
-    mostrarToast("Peso inválido no QR", "erro");
-    return;
-  }
-
-  // Verifica se já existe no histórico
+  if (!peso || peso <= 0) { mostrarToast("Peso inválido no QR", "erro"); return; }
   let registroExistente = localizarRegistroPorQR(dados);
   if (registroExistente) {
-    let status = "";
-    if (registroExistente._removidaEstoque) status = "excluída";
-    else if (registroExistente.consumida) status = "consumida";
-    else status = "ativa no estoque";
-
+    let status = registroExistente._removidaEstoque ? "excluída" : registroExistente.consumida ? "consumida" : "ativa no estoque";
     mostrarToast("Bobina já registrada (" + status + ")", "erro");
     return;
   }
-
   salvarEstadoParaDesfazer();
-
   let identificador = item + " - V" + versao;
-
-  // Usa a data do QR
   let dataEntrada = dados.data || new Date().toLocaleString();
-
-  // Salva o id como o conteúdo completo do QR para comparação futura
-  let idSalvar = dados.id || (Date.now() + Math.random());
-
+  let idSalvar = dados.id || crypto.randomUUID();
   estoque[identificador] = (estoque[identificador] || 0) + peso;
   estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
-
-  historico.push({
-    id: idSalvar,
-    data: dataEntrada,
-    tipo: "Entrada",
-    item: identificador,
-    qtd: peso
-  });
-
+  historico.push({ id: idSalvar, data: dataEntrada, tipo: "Entrada", item: identificador, qtd: peso });
   ultimoItem = identificador;
   salvarDados();
   atualizarTudo();
-
   fecharResultadoQR();
-
+  if (dados.bobinaId) removerPendentePorId(dados.bobinaId);
+  if (idSalvar) removerPendentePorId(idSalvar);
   if (navigator.vibrate) navigator.vibrate([100]);
   mostrarToast(identificador + " adicionado via QR");
 }
 
 function consumirBobinaQR() {
   if (!qrLidoAtual || !qrLidoAtual.registro) return;
-
-  let reg = qrLidoAtual.registro;
-  let chave = reg.item;
-
-  if (reg.consumida) {
-    mostrarToast("Bobina já consumida", "erro");
-    return;
-  }
-
+  let reg = qrLidoAtual.registro, chave = reg.item;
+  if (reg.consumida) { mostrarToast("Bobina já consumida", "erro"); return; }
   salvarEstadoParaDesfazer();
-
   reg.consumida = true;
-
   if (estoque[chave]) {
     estoque[chave] -= reg.qtd;
-    if (estoque[chave] <= 0) {
-      delete estoque[chave];
-      delete estoque[chave + "_qtd"];
-    } else if (estoque[chave + "_qtd"] > 0) {
-      estoque[chave + "_qtd"]--;
-    }
+    if (estoque[chave] <= 0) { delete estoque[chave]; delete estoque[chave + "_qtd"]; }
+    else if (estoque[chave + "_qtd"] > 0) estoque[chave + "_qtd"]--;
   }
-
-  historico.push({
-    id: Date.now() + Math.random(),
-    data: new Date().toLocaleString(),
-    tipo: "Consumo",
-    item: chave,
-    qtd: reg.qtd,
-    refEntradaId: reg.id,
-    refEntradaData: reg.data
-  });
-
-  salvarDados();
-  atualizarTudo();
-  fecharResultadoQR();
-
+  historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: "Consumo", item: chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data });
+  salvarDados(); atualizarTudo(); fecharResultadoQR();
   if (navigator.vibrate) navigator.vibrate([100]);
   mostrarToast("Bobina consumida via QR");
 }
 
 function desmarcarConsumidaQR() {
   if (!qrLidoAtual || !qrLidoAtual.registro) return;
-
-  let reg = qrLidoAtual.registro;
-  let chave = reg.item;
-
-  if (!reg.consumida) {
-    mostrarToast("Bobina não está consumida", "erro");
-    return;
-  }
-
+  let reg = qrLidoAtual.registro, chave = reg.item;
+  if (!reg.consumida) { mostrarToast("Bobina não está consumida", "erro"); return; }
   salvarEstadoParaDesfazer();
-
   reg.consumida = false;
-
   estoque[chave] = (estoque[chave] || 0) + reg.qtd;
   estoque[chave + "_qtd"] = (estoque[chave + "_qtd"] || 0) + 1;
-
-  // Remove registro de consumo correspondente
   for (let i = historico.length - 1; i >= 0; i--) {
-    if (historico[i].tipo === "Consumo" && historico[i].refEntradaId === reg.id) {
-      historico.splice(i, 1);
-      break;
-    }
+    if (historico[i].tipo === "Consumo" && historico[i].refEntradaId === reg.id) { historico.splice(i, 1); break; }
   }
-
-  salvarDados();
-  atualizarTudo();
-  fecharResultadoQR();
-
+  salvarDados(); atualizarTudo(); fecharResultadoQR();
   if (navigator.vibrate) navigator.vibrate([100]);
   mostrarToast("Consumo desmarcado via QR");
 }
 
 function excluirBobinaQR() {
   if (!qrLidoAtual || !qrLidoAtual.registro) return;
-
-  let reg = qrLidoAtual.registro;
-  let chave = reg.item;
-
+  let reg = qrLidoAtual.registro, chave = reg.item;
   if (!confirm("Excluir esta bobina do estoque?")) return;
-
   salvarEstadoParaDesfazer();
-
   if (!reg.consumida && estoque[chave]) {
     estoque[chave] -= reg.qtd;
     if (estoque[chave + "_qtd"] > 0) estoque[chave + "_qtd"]--;
-    if (estoque[chave] <= 0) {
-      delete estoque[chave];
-      delete estoque[chave + "_qtd"];
-    }
+    if (estoque[chave] <= 0) { delete estoque[chave]; delete estoque[chave + "_qtd"]; }
   }
-
   reg._removidaEstoque = true;
-
-  historico.push({
-    id: Date.now() + Math.random(),
-    data: new Date().toLocaleString(),
-    tipo: "Exclusão",
-    item: chave,
-    qtd: reg.qtd,
-    refEntradaId: reg.id,
-    refEntradaData: reg.data
-  });
-
-  salvarDados();
-  atualizarTudo();
-  fecharResultadoQR();
-
+  historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: "Exclusão", item: chave, qtd: reg.qtd, refEntradaId: reg.id, refEntradaData: reg.data });
+  salvarDados(); atualizarTudo(); fecharResultadoQR();
   if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
   mostrarToast("Bobina excluída via QR");
 }
@@ -3389,22 +3004,6 @@ function fecharResultadoQR() {
   document.getElementById("modalResultadoQR").classList.add("hidden");
   qrLidoAtual = null;
 }
-
-window.fecharResultadoQR = fecharResultadoQR;
-window.usarQRNaMovimentacao = usarQRNaMovimentacao;
-window.entradaRapidaQR = entradaRapidaQR;
-window.consumirBobinaQR = consumirBobinaQR;
-window.desmarcarConsumidaQR = desmarcarConsumidaQR;
-window.excluirBobinaQR = excluirBobinaQR;
-window.abrirScannerQR = abrirScannerQR;
-window.fecharScannerQR = fecharScannerQR;
-window.gerarQRBobina = gerarQRBobina;
-window.abrirAcoesHistorico = abrirAcoesHistorico;
-window.fecharModalHistoricoAcoes = fecharModalHistoricoAcoes;
-window.abrirQRDoHistorico = abrirQRDoHistorico;
-window.confirmarRemoverHistoricoSelecionado = confirmarRemoverHistoricoSelecionado;
-window.abrirScannerContinuo = abrirScannerContinuo;
-window.fecharScannerContinuo = fecharScannerContinuo;
 
 /* ================= SCANNER CONTÍNUO ================= */
 
@@ -3418,38 +3017,32 @@ async function abrirScannerContinuo() {
   continuoContagem = 0;
   continuoIdsLidos = [];
   continuoProcessando = false;
-
   document.getElementById("modalScannerContinuo").classList.remove("hidden");
   document.getElementById("continuoContador").textContent = "0 bobinas adicionadas";
   document.getElementById("continuoLog").innerHTML = "";
   document.getElementById("readerContinuo").innerHTML = "";
-
   try {
     leitorContinuo = new Html5Qrcode("readerContinuo");
-
     const cameras = await Html5Qrcode.getCameras();
-    if (!cameras || cameras.length === 0) {
-      mostrarToast("Nenhuma câmera encontrada", "erro");
-      fecharScannerContinuo();
-      return;
-    }
-
+    if (!cameras || cameras.length === 0) { mostrarToast("Nenhuma câmera encontrada", "erro"); fecharScannerContinuo(); return; }
     await leitorContinuo.start(
       { facingMode: "environment" },
-      {
-        fps: 10,
-        qrbox: { width: 220, height: 220 }
-      },
+      { fps: 10, qrbox: { width: 220, height: 220 } },
       async (decodedText) => {
         if (continuoProcessando) return;
         continuoProcessando = true;
-        await processarLeituraContinua(decodedText);
-        // Pequeno delay para não ler o mesmo QR duas vezes
-        setTimeout(() => { continuoProcessando = false; }, 1500);
+        try {
+          await processarLeituraContinua(decodedText);
+        } catch (erro) {
+          console.error("Erro no scanner contínuo:", erro);
+          adicionarLogContinuo("❌ " + new Date().toLocaleTimeString() + " — erro ao processar leitura", "erro");
+          if (navigator.vibrate) navigator.vibrate([200]);
+        } finally {
+          setTimeout(() => { continuoProcessando = false; }, 1500);
+        }
       },
       () => {}
     );
-
     leitorContinuoAberto = true;
   } catch (erro) {
     console.error(erro);
@@ -3464,51 +3057,31 @@ async function fecharScannerContinuo() {
       await leitorContinuo.stop();
       await leitorContinuo.clear();
     }
-  } catch (e) {
-    console.warn("Erro ao fechar scanner contínuo:", e);
-  }
-
+  } catch (e) { console.warn("Erro ao fechar scanner contínuo:", e); }
   leitorContinuo = null;
   leitorContinuoAberto = false;
   continuoProcessando = false;
-
   document.getElementById("modalScannerContinuo").classList.add("hidden");
   document.getElementById("readerContinuo").innerHTML = "";
-
-  if (continuoContagem > 0) {
-    atualizarTudo();
-    mostrarToast(continuoContagem + " bobina(s) adicionada(s)");
-  }
+  if (continuoContagem > 0) { atualizarTudo(); mostrarToast(continuoContagem + " bobina(s) adicionada(s)"); }
 }
 
 async function processarLeituraContinua(textoLido) {
   let dados = null;
   let agora = new Date().toLocaleTimeString();
+  try { dados = JSON.parse(textoLido); }
+  catch (e) { dados = interpretarQRSimplificado(textoLido); }
+  if (!dados) { adicionarLogContinuo("⚠️ " + agora + " — QR inválido", "erro"); return; }
 
-  // Tenta JSON primeiro, depois formato simplificado
-  try {
-    dados = JSON.parse(textoLido);
-  } catch (e) {
-    dados = interpretarQRSimplificado(textoLido);
-  }
-
-  if (!dados) {
-    adicionarLogContinuo("⚠️ " + agora + " — QR inválido", "erro");
-    return;
-  }
-
-  // Verifica se já leu nesta sessão
-  let idQR = dados.id || (dados.item + "/V" + dados.versao + "/" + dados.data);
+  let idQR = dados.bobinaId || dados.id || (dados.item + "/V" + dados.versao + "/" + dados.peso);
   if (continuoIdsLidos.includes(idQR)) {
     adicionarLogContinuo("⏭️ " + agora + " — " + dados.item + " V" + dados.versao + " — já lido", "duplicado");
     if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
     return;
   }
 
-  // Verifica cadastro
   let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
-  let item = dados.item;
-  let versao = String(dados.versao);
+  let item = dados.item, versao = String(dados.versao);
   let peso = parseFloat(dados.peso);
 
   if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
@@ -3516,49 +3089,39 @@ async function processarLeituraContinua(textoLido) {
     if (navigator.vibrate) navigator.vibrate([200]);
     return;
   }
-
   if (!peso || peso <= 0) {
     adicionarLogContinuo("❌ " + agora + " — " + item + " V" + versao + " — peso inválido", "erro");
     if (navigator.vibrate) navigator.vibrate([200]);
     return;
   }
 
-  // Verifica duplicidade no histórico
   let registro = localizarRegistroPorQR(dados);
   if (registro) {
-    adicionarLogContinuo("⚠️ " + agora + " — " + item + " V" + versao + " — já no estoque", "duplicado");
+    if (registro._removidaEstoque) adicionarLogContinuo("🚫 " + agora + " — " + item + " V" + versao + " — Bobina excluída", "erro");
+    else if (registro.consumida) adicionarLogContinuo("⚠️ " + agora + " — " + item + " V" + versao + " — Bobina consumida", "duplicado");
+    else adicionarLogContinuo("⚠️ " + agora + " — " + item + " V" + versao + " — já no estoque", "duplicado");
     if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
     return;
   }
 
-// ENTRADA RÁPIDA
   salvarEstadoParaDesfazer();
-
   let identificador = item + " - V" + versao;
   estoque[identificador] = (estoque[identificador] || 0) + peso;
   estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
-
-  // Usa data e id do QR
   let dataEntrada = dados.data || new Date().toLocaleString();
-  let idEntrada = dados.id || (Date.now() + Math.random());
-
-  historico.push({
-    id: idEntrada,
-    data: dataEntrada,
-    tipo: "Entrada",
-    item: identificador,
-    qtd: peso
-  });
-
+  let idSalvar = dados.id || crypto.randomUUID();
+  historico.push({ id: idSalvar, data: dataEntrada, tipo: "Entrada", item: identificador, qtd: peso });
   ultimoItem = identificador;
-  salvarDados();
+    salvarDados();
+
+  // Remove da lista de pendentes ao dar entrada
+  if (dados.bobinaId) removerPendentePorId(dados.bobinaId);
+  if (idSalvar) removerPendentePorId(idSalvar);
 
   continuoIdsLidos.push(idQR);
   continuoContagem++;
-
   document.getElementById("continuoContador").textContent = continuoContagem + " bobina(s) adicionada(s)";
   adicionarLogContinuo("✅ " + agora + " — " + item + " V" + versao + " — " + Math.round(peso) + "kg", "sucesso");
-
   if (navigator.vibrate) navigator.vibrate([100]);
 }
 
@@ -3568,57 +3131,33 @@ function adicionarLogContinuo(texto, tipo) {
   div.textContent = texto;
   div.style.padding = "3px 0";
   div.style.borderBottom = "1px solid #f1f5f9";
-
   if (tipo === "sucesso") div.style.color = "#16a34a";
   else if (tipo === "erro") div.style.color = "#dc2626";
   else if (tipo === "duplicado") div.style.color = "#ca8a04";
-
-  // Insere no topo
   if (log.firstChild) log.insertBefore(div, log.firstChild);
   else log.appendChild(div);
 }
 
-function descobrirTipoPorItem(item) {
-  let tipoEncontrado = "";
-  Object.keys(banco).forEach(tipo => {
-    if (banco[tipo] && banco[tipo][item]) tipoEncontrado = tipo;
-  });
-  return tipoEncontrado;
-}
-
 /* ================= EXPORTAR QR CODES ================= */
+
 function coletarBobinasParaQR(dataInicioP, dataFimP) {
   let bobinas = [];
-
   historico.forEach((h, index) => {
-    if (h.tipo !== "Entrada") return;
-    if (h._removidaEstoque) return;
-
-    // Filtro por período
+    if (h.tipo !== "Entrada" || h._removidaEstoque) return;
     if (dataInicioP || dataFimP) {
       let dataISO = h.data.split(",")[0].trim().split("/").reverse().join("-");
       if (dataInicioP && dataISO < dataInicioP) return;
       if (dataFimP && dataISO > dataFimP) return;
     }
-
     let partes = h.item.split(" - V");
     if (partes.length < 2) return;
-    let item = partes[0];
-    let versao = partes[1];
-
+    let item = partes[0], versao = partes[1];
     let tipo = "";
-    Object.keys(banco).forEach(t => {
-      if (banco[t] && banco[t][item]) tipo = t;
-    });
-
+    Object.keys(banco).forEach(t => { if (banco[t] && banco[t][item]) tipo = t; });
     let tamanho = "";
     if (tipo && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
       tamanho = banco[tipo][item][versao].tamanho;
     }
-
-    let status = h.consumida ? "consumida" : "ativa";
-
-    // Monta QR simplificado
     let dataQR = "";
     if (h.data) {
       let partesData = h.data.split(", ");
@@ -3631,19 +3170,21 @@ function coletarBobinasParaQR(dataInicioP, dataFimP) {
         }
       }
     }
-
+    let idCurto = '';
+    if (h.id && typeof h.id === 'string' && h.id.includes('-')) {
+      idCurto = h.id.replace(/-/g, '').substring(0, 8);
+    }
     let conteudoQR = item + "/" + versao + "/" + Math.round(h.qtd);
     if (dataQR) conteudoQR += "/" + dataQR;
+    if (idCurto) conteudoQR += "/" + idCurto;
 
-    // Extrai data de produção formatada
     let dataProducao = "";
     if (dataQR) {
       let dParts = dataQR.split("/");
       if (dParts.length === 2) {
-        let d = dParts[0];
-        let hr = dParts[1];
+        let d = dParts[0], hr = dParts[1];
+        if (hr.length === 4) hr = hr + "00";
         if (d.length === 8 && hr.length >= 4) {
-          if (hr.length === 4) hr = hr + "00";
           dataProducao = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
             " " + hr.substring(0,2) + ":" + hr.substring(2,4) + ":" + hr.substring(4,6);
         }
@@ -3651,216 +3192,22 @@ function coletarBobinasParaQR(dataInicioP, dataFimP) {
     }
 
     bobinas.push({
-      index: index,
-      id: conteudoQR,
-      tipo: tipo,
-      tipoNome: nomeCompletoTipo(tipo),
-      item: item,
-      versao: versao,
-      tamanho: tamanho,
-      peso: Math.round(h.qtd),
-      data: h.data,
-      dataProducao: dataProducao,
-      status: status,
+      index, id: conteudoQR, tipo, tipoNome: nomeCompletoTipo(tipo),
+      item, versao, tamanho, peso: Math.round(h.qtd),
+      data: h.data, dataProducao,
+      status: h.consumida ? "consumida" : "ativa",
       qrData: conteudoQR
     });
   });
-
   return bobinas;
 }
 
-function gerarPDFComQRCodes(resultados) {
-  if (resultados.length === 0) {
-    mostrarToast("Nenhum QR gerado", "erro");
-    return;
-  }
-
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-
-  const agora = new Date().toLocaleString('pt-BR');
-  const margem = 10;
-  const cols = 3;
-  const linhas = 5;
-  const larguraUtil = 210 - (margem * 2);
-  const alturaUtil = 297 - (margem * 2) - 10;
-  const larguraCell = larguraUtil / cols;
-  const alturaCell = alturaUtil / linhas;
-  const qrSize = Math.min(larguraCell - 8, alturaCell - 18);
-
-  let pagina = 0;
-
-  for (let i = 0; i < resultados.length; i++) {
-    let posNaPagina = i % (cols * linhas);
-
-    if (posNaPagina === 0) {
-      if (i > 0) doc.addPage();
-      pagina++;
-
-      doc.setFillColor(30, 58, 138);
-      doc.rect(0, 0, 210, 10, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'bold');
-      doc.text('QR Codes — Conferência de Estoques', margem, 7);
-      doc.setFont('helvetica', 'normal');
-      doc.text('Página ' + pagina + ' | ' + agora, 210 - margem, 7, { align: 'right' });
-      doc.setTextColor(0, 0, 0);
-    }
-
-    let col = posNaPagina % cols;
-    let lin = Math.floor(posNaPagina / cols);
-
-    let x = margem + (col * larguraCell);
-    let y = 12 + (lin * alturaCell);
-
-    let bob = resultados[i];
-
-    doc.setDrawColor(200, 200, 200);
-    doc.setLineWidth(0.3);
-    doc.roundedRect(x + 1, y + 1, larguraCell - 2, alturaCell - 2, 2, 2, 'S');
-
-    if (bob.dataUrl) {
-      let qrX = x + (larguraCell - qrSize) / 2;
-      let qrY = y + 3;
-      doc.addImage(bob.dataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
-    }
-
-    let textoY = y + qrSize + 5;
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 0, 0);
-    doc.text(bob.item + '/' + bob.versao + ' — ' + bob.peso + 'kg', x + larguraCell / 2, textoY, { align: 'center' });
-
-    doc.setFontSize(5);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(120, 120, 120);
-    doc.text(bob.dataProducao || '', x + larguraCell / 2, textoY + 3.5, { align: 'center' });
-    doc.setTextColor(0, 0, 0);
-  }
-
-  doc.save("QR_A4_" + getTimestamp() + ".pdf");
-  mostrarToast(resultados.length + " QR codes exportados");
-}
-
-function exportarQRCodes(dataInicioP, dataFimP) {
-  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
-
-  if (bobinas.length === 0) {
-    mostrarToast("Nenhuma bobina encontrada no período", "erro");
-    return;
-  }
-
-  let modalHTML = `
-    <div class="modal-overlay" id="modalProgressoQR">
-      <div class="modal-content" style="text-align:center; max-width:350px;">
-        <h3 style="margin-bottom:12px;">Gerando QR Codes</h3>
-        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
-        <div class="barra" style="margin:12px 0;">
-          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
-        </div>
-        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
-      </div>
-    </div>
-  `;
-
-  let divModal = document.createElement('div');
-  divModal.innerHTML = modalHTML;
-  document.body.appendChild(divModal.firstElementChild);
-
-  setTimeout(async () => {
-    let container = document.createElement('div');
-    container.style.position = 'fixed';
-    container.style.left = '-9999px';
-    container.style.top = '0';
-    document.body.appendChild(container);
-
-    let resultados = [];
-
-    for (let i = 0; i < bobinas.length; i++) {
-      let bob = bobinas[i];
-
-      let progresso = Math.round(((i + 1) / bobinas.length) * 100);
-      let textoEl = document.getElementById('progressoQRTexto');
-      let barraEl = document.getElementById('progressoQRBarra');
-      if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
-      if (barraEl) barraEl.style.width = progresso + "%";
-
-      let qrDiv = document.createElement('div');
-      qrDiv.id = 'tempQR_' + i;
-      container.appendChild(qrDiv);
-
-      let dataUrl = await new Promise((resolve) => {
-        new QRCode(qrDiv, {
-          text: bob.qrData,
-          width: 300,
-          height: 300,
-          colorDark: "#000000",
-          colorLight: "#ffffff",
-          correctLevel: QRCode.CorrectLevel.M
-        });
-
-        let tentativas = 0;
-        let verificar = setInterval(() => {
-          tentativas++;
-          let canvas = qrDiv.querySelector('canvas');
-          let img = qrDiv.querySelector('img');
-
-          if (canvas) {
-            clearInterval(verificar);
-            resolve(canvas.toDataURL('image/png'));
-          } else if (img && img.complete && img.naturalWidth > 0) {
-            clearInterval(verificar);
-            let c = document.createElement('canvas');
-            c.width = 300;
-            c.height = 300;
-            let ctx = c.getContext('2d');
-            ctx.drawImage(img, 0, 0, 300, 300);
-            resolve(c.toDataURL('image/png'));
-          } else if (img && !img.complete) {
-            clearInterval(verificar);
-            img.onload = function() {
-              let c = document.createElement('canvas');
-              c.width = 300;
-              c.height = 300;
-              let ctx = c.getContext('2d');
-              ctx.drawImage(img, 0, 0, 300, 300);
-              resolve(c.toDataURL('image/png'));
-            };
-            img.onerror = function() { resolve(""); };
-          } else if (tentativas > 50) {
-            clearInterval(verificar);
-            resolve("");
-          }
-        }, 50);
-      });
-
-      resultados.push({ ...bob, dataUrl: dataUrl });
-      await new Promise(r => setTimeout(r, 10));
-    }
-
-    container.remove();
-
-    let modalProgresso = document.getElementById('modalProgressoQR');
-    if (modalProgresso) modalProgresso.remove();
-
-    gerarPDFComQRCodes(resultados);
-
-  }, 100);
-}  
-
-// Exportar QR codes individuais como imagens ZIP
 async function exportarQRCodesZIP(dataInicioP, dataFimP) {
   let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+  if (bobinas.length === 0) { mostrarToast("Nenhuma bobina encontrada", "erro"); return; }
 
-  if (bobinas.length === 0) {
-    mostrarToast("Nenhuma bobina encontrada", "erro");
-    return;
-  }
-
-  // Abre modal de progresso
-  let modalHTML = `
+  let divModal = document.createElement('div');
+  divModal.innerHTML = `
     <div class="modal-overlay" id="modalProgressoQR">
       <div class="modal-content" style="text-align:center; max-width:350px;">
         <h3 style="margin-bottom:12px;">Gerando imagens QR</h3>
@@ -3872,59 +3219,34 @@ async function exportarQRCodesZIP(dataInicioP, dataFimP) {
       </div>
     </div>
   `;
-
-  let divModal = document.createElement('div');
-  divModal.innerHTML = modalHTML;
   document.body.appendChild(divModal.firstElementChild);
-
-  setTimeout(async () => {
-    await gerarImagensQRIndividuais(bobinas);
-  }, 100);
+  setTimeout(async () => { await gerarImagensQRIndividuais(bobinas); }, 100);
 }
 
 async function gerarImagensQRIndividuais(bobinas) {
   let container = document.createElement('div');
   container.style.position = 'fixed'; container.style.left = '-9999px'; container.style.top = '0';
   document.body.appendChild(container);
-
   let arquivos = [];
-  const total = bobinas.length;
 
-  for (let i = 0; i < total; i++) {
+  for (let i = 0; i < bobinas.length; i++) {
     let bob = bobinas[i];
-    let progresso = Math.round(((i + 1) / total) * 100);
-    document.getElementById('progressoQRTexto').textContent = (i + 1) + " / " + total;
+    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
+    document.getElementById('progressoQRTexto').textContent = (i + 1) + " / " + bobinas.length;
     document.getElementById('progressoQRBarra').style.width = progresso + "%";
 
-    // Criar um novo div limpo para cada QR para evitar conflito
     let qrDiv = document.createElement('div');
     container.appendChild(qrDiv);
 
-    // Gerar o QR e esperar a conclusão real
     let qrDataUrl = await new Promise((resolve) => {
-      new QRCode(qrDiv, { 
-        text: bob.qrData, 
-        width: 300, 
-        height: 300, 
-        correctLevel: QRCode.CorrectLevel.M 
-      });
-
+      new QRCode(qrDiv, { text: bob.qrData, width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M });
       let checkCount = 0;
       let interval = setInterval(() => {
         let canvas = qrDiv.querySelector('canvas');
         let img = qrDiv.querySelector('img');
-        
-        // Verifica se o canvas tem conteúdo ou se a imagem carregou
-        if (canvas) {
-          clearInterval(interval);
-          resolve(canvas.toDataURL('image/png'));
-        } else if (img && img.src && img.complete && img.naturalWidth > 0) {
-          clearInterval(interval);
-          resolve(img.src);
-        } else if (checkCount++ > 100) { // Aumentado tempo de espera para 5 segundos
-          clearInterval(interval);
-          resolve(""); 
-        }
+        if (canvas) { clearInterval(interval); resolve(canvas.toDataURL('image/png')); }
+        else if (img && img.src && img.complete && img.naturalWidth > 0) { clearInterval(interval); resolve(img.src); }
+        else if (checkCount++ > 100) { clearInterval(interval); resolve(""); }
       }, 50);
     });
 
@@ -3933,31 +3255,22 @@ async function gerarImagensQRIndividuais(bobinas) {
       canvas.width = 400; canvas.height = 500;
       let ctx = canvas.getContext('2d');
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 400, 500);
-
       await new Promise((resolve) => {
         let tempImg = new Image();
-        tempImg.onload = () => { 
-          ctx.drawImage(tempImg, 50, 10, 300, 300); 
-          resolve(); 
-        };
+        tempImg.onload = () => { ctx.drawImage(tempImg, 50, 10, 300, 300); resolve(); };
         tempImg.src = qrDataUrl;
       });
-
-      ctx.fillStyle = '#1e293b'; ctx.textAlign = 'center'; ctx.font = 'bold 22px Arial';
-      ctx.fillText(bob.item + ' — V' + bob.versao, 200, 340);
+      ctx.fillStyle = '#1e293b'; ctx.textAlign = 'center';
+      ctx.font = 'bold 22px Arial'; ctx.fillText(bob.item + ' — V' + bob.versao, 200, 340);
       ctx.font = '18px Arial'; ctx.fillText(bob.tamanho + ' | ' + bob.peso + ' kg', 200, 370);
       let producaoTexto = bob.data ? "Produção: " + bob.data.split(", ")[0] + " às " + bob.data.split(", ")[1] : "";
       ctx.font = '14px Arial'; ctx.fillStyle = '#64748b'; ctx.fillText(producaoTexto, 200, 395);
       ctx.font = '12px Arial'; ctx.fillText(bob.tipoNome, 200, 415);
-
       let blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
       let nomeArquivo = (bob.item + "_V" + bob.versao + "_" + bob.peso + "kg_" + i + ".png").replace(/[^a-zA-Z0-9._-]/g, '_');
-      arquivos.push({ nome: nomeArquivo, blob: blob });
+      arquivos.push({ nome: nomeArquivo, blob });
     }
-    
-    // Limpa o div para liberar memória
     qrDiv.remove();
-    // Pequena pausa para o navegador respirar
     await new Promise(r => setTimeout(r, 20));
   }
 
@@ -3978,467 +3291,110 @@ async function gerarImagensQRIndividuais(bobinas) {
     mostrarToast("Erro: Nenhuma imagem processada", "erro");
   }
 }
-window.exportarQRCodes = exportarQRCodes;
-window.exportarQRCodesZIP = exportarQRCodesZIP;
 
-window.ajustarFormatoExport = function() {
-  let tipoDados = document.querySelector('input[name="tipoDados"]:checked');
-  let blocoFormatoQR = document.getElementById("blocoFormatoQR");
-  let blocoFormatoNormal = document.getElementById("blocoFormatoNormal");
-
-  if (!blocoFormatoQR || !blocoFormatoNormal) return;
-
-  if (tipoDados && tipoDados.value === 'qrcodes') {
-    blocoFormatoQR.classList.remove('hidden');
-    blocoFormatoNormal.classList.add('hidden');
-  } else if (tipoDados && tipoDados.value === 'backup') {
-    blocoFormatoQR.classList.add('hidden');
-    blocoFormatoNormal.classList.add('hidden');
-  } else {
-    blocoFormatoQR.classList.add('hidden');
-    blocoFormatoNormal.classList.remove('hidden');
-  }
-};
-function interpretarQRSimplificado(texto) {
-  if (!texto || !texto.includes("/")) return null;
-
-  let partes = texto.split("/");
-
-  // Formato: item/versao/peso/ddmmaaaa/hhmmss ou hhmm
-  if (partes.length < 3) return null;
-
-  let item = partes[0];
-  let versao = partes[1];
-  let peso = parseFloat(partes[2]);
-
-  if (!item || !versao || isNaN(peso) || peso <= 0) return null;
-
-  // Monta data se tiver
-  let dataFormatada = "";
-  let dataBruta = "";
-  if (partes.length >= 5) {
-    let d = partes[3]; // ddmmaaaa
-    let h = partes[4]; // hhmmss ou hhmm
-
-    // Completa segundos se não tiver
-    if (h.length === 4) h = h + "00";
-
-    if (d.length === 8 && h.length === 6) {
-      dataFormatada = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
-        ", " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
-      dataBruta = d + "/" + h;
-    }
-  }
-
-  // O id é o próprio conteúdo completo do QR
-  let idUnico = texto;
-
-  // Se a hora era 4 dígitos, normaliza o id com 6
-  if (partes.length >= 5 && partes[4].length === 4) {
-    idUnico = partes[0] + "/" + partes[1] + "/" + partes[2] + "/" + partes[3] + "/" + partes[4] + "00";
-  }
-
-  // Descobre o tipo pelo item
-  let tipo = descobrirTipoPorItem(item);
-
-  return {
-    id: idUnico,
-    tipo: tipo,
-    item: item,
-    versao: versao,
-    peso: peso,
-    data: dataFormatada,
-    dataBruta: dataBruta
-  };
-}
-
-window.toggleQtdEtiqueta = function() {
-  let formato = document.querySelector('input[name="formatoExport"]:checked');
-  let bloco = document.getElementById("blocoQtdEtiqueta");
-  if (!bloco) return;
-  if (formato && formato.value === 'etiqueta') {
-    bloco.classList.remove('hidden');
-  } else {
-    bloco.classList.add('hidden');
-  }
-};
-
-document.addEventListener('change', function(e) {
-  if (e.target.name === 'formatoExport') {
-    let bloco = document.getElementById("blocoQtdEtiqueta");
-    if (!bloco) return;
-    if (e.target.value === 'etiqueta') {
-      bloco.classList.remove('hidden');
-    } else {
-      bloco.classList.add('hidden');
-    }
-  }
-});
-
-async function exportarQRCodesEtiqueta(dataInicioP, dataFimP, qtdPorEtiqueta) {
-  if (!qtdPorEtiqueta) qtdPorEtiqueta = 4;
-  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
-
-  if (bobinas.length === 0) {
-    mostrarToast("Nenhuma bobina encontrada", "erro");
-    return;
-  }
-
-  let modalHTML = `
-    <div class="modal-overlay" id="modalProgressoQR">
-      <div class="modal-content" style="text-align:center; max-width:350px;">
-        <h3 style="margin-bottom:12px;">Gerando etiquetas QR</h3>
-        <p id="progressoQRTexto">0 / ${bobinas.length}</p>
-        <div class="barra" style="margin:12px 0;">
-          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
-        </div>
-        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
-      </div>
-    </div>
-  `;
-
-  let divModal = document.createElement('div');
-  divModal.innerHTML = modalHTML;
-  document.body.appendChild(divModal.firstElementChild);
-
-  setTimeout(async () => {
-    await gerarQRCodesEmLoteEtiqueta(bobinas, qtdPorEtiqueta);
-  }, 100);
-}
-
-async function gerarQRCodesEmLoteEtiqueta(bobinas, qtdPorEtiqueta) {
-  let container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.left = '-9999px';
-  container.style.top = '0';
-  document.body.appendChild(container);
-
-  let resultados = [];
-
-  for (let i = 0; i < bobinas.length; i++) {
-    let bob = bobinas[i];
-
-    let progresso = Math.round(((i + 1) / bobinas.length) * 100);
-    let textoEl = document.getElementById('progressoQRTexto');
-    let barraEl = document.getElementById('progressoQRBarra');
-    if (textoEl) textoEl.textContent = (i + 1) + " / " + bobinas.length;
-    if (barraEl) barraEl.style.width = progresso + "%";
-
-    let qrDiv = document.createElement('div');
-    qrDiv.id = 'tempQR_' + i;
-    container.appendChild(qrDiv);
-
-    let dataUrl = await new Promise((resolve) => {
-      new QRCode(qrDiv, {
-        text: bob.qrData,
-        width: 200,
-        height: 200,
-        colorDark: "#000000",
-        colorLight: "#ffffff",
-        correctLevel: QRCode.CorrectLevel.M
-      });
-
-      let tentativas = 0;
-      let verificar = setInterval(() => {
-        tentativas++;
-        let canvas = qrDiv.querySelector('canvas');
-        let img = qrDiv.querySelector('img');
-
-        if (canvas) {
-          clearInterval(verificar);
-          resolve(canvas.toDataURL('image/png'));
-        } else if (img && img.complete && img.naturalWidth > 0) {
-          clearInterval(verificar);
-          let c = document.createElement('canvas');
-          c.width = 200;
-          c.height = 200;
-          let ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0, 200, 200);
-          resolve(c.toDataURL('image/png'));
-        } else if (img && !img.complete) {
-          clearInterval(verificar);
-          img.onload = function() {
-            let c = document.createElement('canvas');
-            c.width = 200;
-            c.height = 200;
-            let ctx = c.getContext('2d');
-            ctx.drawImage(img, 0, 0, 200, 200);
-            resolve(c.toDataURL('image/png'));
-          };
-          img.onerror = function() { resolve(""); };
-        } else if (tentativas > 50) {
-          clearInterval(verificar);
-          resolve("");
-        }
-      }, 50);
-    });
-
-    resultados.push({ ...bob, dataUrl: dataUrl });
-    await new Promise(r => setTimeout(r, 10));
-  }
-
-  container.remove();
-
-  let modalProgresso = document.getElementById('modalProgressoQR');
-  if (modalProgresso) modalProgresso.remove();
-
-  gerarPDFEtiquetaCompacta(resultados, qtdPorEtiqueta);
-}
-
-function gerarPDFEtiquetaCompacta(resultados, qtdPorEtiqueta) {
-  if (resultados.length === 0) {
-    mostrarToast("Nenhum QR gerado", "erro");
-    return;
-  }
-
-  const { jsPDF } = window.jspdf;
-
-  const larguraPagina = 200;
-  const alturaPagina = 60;
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [alturaPagina, larguraPagina] });
-
-  const margemX = 4;
-  const margemY = 3;
-  const larguraUtil = larguraPagina - (margemX * 2);
-  const alturaUtil = alturaPagina - (margemY * 2);
-
-  const larguraBloco = larguraUtil / qtdPorEtiqueta;
-  const qrSize = Math.min(20, larguraBloco - 4, alturaUtil - 12);
-
-  for (let i = 0; i < resultados.length; i++) {
-    let posNaPagina = i % qtdPorEtiqueta;
-
-    if (posNaPagina === 0 && i > 0) {
-      doc.addPage([alturaPagina, larguraPagina]);
-    }
-
-    let bob = resultados[i];
-    let x = margemX + (posNaPagina * larguraBloco);
-    let y = margemY;
-
-    let centroX = x + (larguraBloco / 2);
-
-    let qrX = centroX - (qrSize / 2);
-    let qrY = y + 2;
-
-    if (bob.dataUrl) {
-      doc.addImage(bob.dataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
-    }
-
-    // Texto abaixo do QR — linha única
-    let textoY = qrY + qrSize + 3.5;
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 0, 0);
-    doc.text(bob.item + '/' + bob.versao + ' — ' + bob.peso + 'kg', centroX, textoY, { align: 'center' });
-
-    // Marcas de corte entre blocos
-    if (posNaPagina > 0) {
-      let corteX = x;
-
-      doc.setDrawColor(0, 0, 0);
-      doc.setLineWidth(0.15);
-
-      let dashLen = 1.5;
-      let gapLen = 1.5;
-      let posY = 0;
-
-      while (posY < alturaPagina) {
-        let endY = Math.min(posY + dashLen, alturaPagina);
-        doc.line(corteX, posY, corteX, endY);
-        posY = endY + gapLen;
-      }
-
-      let marcaTamanho = 2;
-
-      doc.setLineWidth(0.2);
-      doc.line(corteX - marcaTamanho, 1, corteX + marcaTamanho, 1);
-      doc.line(corteX, 0, corteX, 1 + marcaTamanho);
-
-      doc.line(corteX - marcaTamanho, alturaPagina - 1, corteX + marcaTamanho, alturaPagina - 1);
-      doc.line(corteX, alturaPagina - 1 - marcaTamanho, corteX, alturaPagina);
-    }
-  }
-
-    doc.save("QR_" + qtdPorEtiqueta + "etq_" + getTimestamp() + ".pdf");
-  mostrarToast(resultados.length + " etiquetas exportadas");
-}
-
-window.exportarQRCodesEtiqueta = exportarQRCodesEtiqueta;
-window.gerarPDFEtiquetaCompacta = gerarPDFEtiquetaCompacta;
-
-/* ================= EXPORTAÇÃO ZPL (ZEBRA TLP 2844) ================= */
-
-function exportarCSVZebraMult(dataInicioP, dataFimP, qtdPorEtiqueta = 6) {
-  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
-
-  if (bobinas.length === 0) {
-    mostrarToast("Nenhuma bobina encontrada", "erro");
-    return;
-  }
-
-  let linhas = [];
-
-  // Cabeçalho: qr1, desc1, qr2, desc2...
-  let cabecalho = [];
-  for (let i = 1; i <= qtdPorEtiqueta; i++) {
-    cabecalho.push(`qr${i}`, `desc${i}`);
-  }
-  linhas.push(cabecalho.join(","));
-
-  for (let i = 0; i < bobinas.length; i += qtdPorEtiqueta) {
-    let linhaDados = [];
-
-    for (let j = 0; j < qtdPorEtiqueta; j++) {
-      let bob = bobinas[i + j];
-
-      if (bob) {
-        let descricao = `${bob.item}/${bob.versao} - ${bob.peso}kg`;
-        linhaDados.push(`"${bob.qrData}"`, `"${descricao}"`);
-      } else {
-        linhaDados.push('""', '""');
-      }
-    }
-
-    linhas.push(linhaDados.join(","));
-  }
-
-  let csv = linhas.join("\n");
-
-  let blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  let link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `Zebra_${qtdPorEtiqueta}QR_` + getTimestamp() + ".csv";
-  link.click();
-
-  mostrarToast(`CSV exportado (${qtdPorEtiqueta} QR por etiqueta)`);
-}
-
-window.exportarCSVZebra = function() {
-  exportarCSVZebraMult(null, null, 6);
-};
-
-function exportarZPLZebra(dataInicioP, dataFimP, qtdPorEtiqueta) {
-  if (!qtdPorEtiqueta) qtdPorEtiqueta = 6;
-
-  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
-
-  if (bobinas.length === 0) {
-    mostrarToast("Nenhuma bobina encontrada no período", "erro");
-    return;
-  }
-
-  let larguraEtiqueta = 610;
-  let alturaEtiqueta = 406;
-
-  let zpl = "";
-
-  for (let i = 0; i < bobinas.length; i += qtdPorEtiqueta) {
-    zpl += "^XA\n";
-    zpl += "^CI28\n";
-    zpl += "^PW" + larguraEtiqueta + "\n";
-    zpl += "^LL" + alturaEtiqueta + "\n";
-
-    let cols, qrMag, fontH, fontW;
-
-    if (qtdPorEtiqueta === 4) {
-      cols = 2;
-      qrMag = 5;
-      fontH = 20;
-      fontW = 20;
-    } else {
-      cols = 3;
-      qrMag = 4;
-      fontH = 16;
-      fontW = 16;
-    }
-
-    let linhas = Math.ceil(qtdPorEtiqueta / cols);
-    let cellW = Math.floor(larguraEtiqueta / cols);
-    let cellH = Math.floor(alturaEtiqueta / linhas);
-
-    // Tamanho real do QR na Zebra: (mag * 25) + margem interna
-    // O QR code na Zebra com ^BQN,2,mag ocupa aprox mag*25 + 2*mag pontos
-    let qrRealSize = (qrMag * 25) + (qrMag * 2);
-
-    // ===== DIVISÓRIAS =====
-
-    // Linhas verticais entre colunas
+/* ================= EXPORTAÇÃO ZPL / CSV ZEBRA (ATUALIZADO 10x6) ================= */
+
+function montarZPLDeLista(lista, qtdPorEtiqueta) {
+  // Define 8 como o novo padrão para a etiqueta 10x6 (4 colunas x 2 linhas)
+  if (!qtdPorEtiqueta) qtdPorEtiqueta = 8; 
+  
+  let larguraEtiqueta = 799;
+  let alturaEtiqueta = 480;
+  
+  let cols = 4;
+  let linhasGrid = 2; // Math.ceil(8 / 4)
+  let qrMag = 5;
+  let fontH = 20;
+  let fontW = 20;
+  
+  let cellW = 199; // Largura exata da coluna que você calculou
+  let cellH = 240; // Altura exata da linha
+
+  let zpl = '';
+
+  for (let i = 0; i < lista.length; i += qtdPorEtiqueta) {
+    zpl += '^XA\n^CI28\n^PW' + larguraEtiqueta + '\n^LL' + alturaEtiqueta + '\n';
+
+    // 1. Cria as linhas verticais contínuas (X = 199, 398, 597)
     for (let c = 1; c < cols; c++) {
       let x = c * cellW;
-      let dashLen = 6;
-      let gapLen = 4;
-      let posY = 0;
-
-      while (posY < alturaEtiqueta) {
-        let endY = Math.min(posY + dashLen, alturaEtiqueta);
-        zpl += "^FO" + x + "," + posY + "^GB0," + (endY - posY) + ",1^FS\n";
-        posY = endY + gapLen;
-      }
+      zpl += '^FO' + x + ',0^GB1,' + alturaEtiqueta + ',3^FS\n';
     }
-
-    // Linhas horizontais entre linhas
-    for (let l = 1; l < linhas; l++) {
+    
+    // 2. Cria a linha horizontal contínua no meio (Y = 240)
+    for (let l = 1; l < linhasGrid; l++) {
       let y = l * cellH;
-      let dashLen = 6;
-      let gapLen = 4;
-      let posX = 0;
-
-      while (posX < larguraEtiqueta) {
-        let endX = Math.min(posX + dashLen, larguraEtiqueta);
-        zpl += "^FO" + posX + "," + y + "^GB" + (endX - posX) + ",0,1^FS\n";
-        posX = endX + gapLen;
-      }
+      zpl += '^FO0,' + y + '^GB' + larguraEtiqueta + ',1,3^FS\n';
     }
 
-    // ===== QR CODES CENTRALIZADOS =====
-
+    // 3. Preenche as células com os QRs e Textos
     for (let j = 0; j < qtdPorEtiqueta; j++) {
-      let bob = bobinas[i + j];
-      if (!bob) break;
+      let bob = lista[i + j];
+      if (!bob) break; // Se acabarem os itens, para de desenhar
 
       let col = j % cols;
       let lin = Math.floor(j / cols);
-
+      
       let cellX = col * cellW;
       let cellY = lin * cellH;
+      
+      // Coordenadas exatas relativas à célula baseadas no seu ZPL
+      let qrX = cellX + 32;
+      let qrY = cellY + 18;
+      let textoY = cellY + 190;
 
-      // Espaço total: QR + gap + texto
-      let gap = 6;
-      let blocoAltura = qrRealSize + gap + fontH;
-
-      // Centraliza o bloco inteiro na célula
-      let blocoY = cellY + Math.floor((cellH - blocoAltura) / 2);
-      let qrX = cellX + Math.floor((cellW - qrRealSize) / 2);
-      let qrY = blocoY;
-
-      // Texto abaixo do QR, centralizado com ^FB (field block)
-      let textoY = qrY + qrRealSize + gap;
-
-      let desc = bob.item + "/" + bob.versao + " - " + bob.peso;
-
-      // QR Code centralizado
-      zpl += "^FO" + qrX + "," + qrY + "^BQN,2," + qrMag + "^FDMM," + bob.qrData + "^FS\n";
-
-      // Texto centralizado usando ^FB (field block com alinhamento central)
-      zpl += "^FO" + cellX + "," + textoY + "^A0N," + fontH + "," + fontW + "^FB" + cellW + ",1,0,C^FD" + desc + "^FS\n";
+      // Código de Barras BQN (QR Code)
+      zpl += '^FO' + qrX + ',' + qrY + '^BQN,2,' + qrMag + '^FDLA,' + bob.qrData + '^FS\n';
+      // Texto Centralizado no final da célula
+      zpl += '^FO' + cellX + ',' + textoY + '^A0N,' + fontH + ',' + fontW + '^FB' + cellW + ',1,0,C^FD' + bob.desc + '^FS\n';
     }
-
-    zpl += "^XZ\n\n";
+    zpl += '^XZ\n\n';
   }
+  return zpl.trim();
+}
 
-  let blob = new Blob([zpl], { type: "text/plain" });
+function exportarZPLZebra(dataInicioP, dataFimP, qtdPorEtiqueta) {
+  if (!qtdPorEtiqueta) qtdPorEtiqueta = 8;
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+  if (bobinas.length === 0) { mostrarToast("Nenhuma bobina encontrada no período", "erro"); return; }
+  let lista = bobinas.map(bob => ({ qrData: bob.qrData, desc: bob.item + "/" + bob.versao + " - " + bob.peso }));
+  let zpl = montarZPLDeLista(lista, qtdPorEtiqueta);
+  let blob = new Blob([zpl], { type: "application/octet-stream" });
   let link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = "Zebra_" + qtdPorEtiqueta + "QR_" + getTimestamp() + ".zpl";
   link.click();
-
   let totalEtiquetas = Math.ceil(bobinas.length / qtdPorEtiqueta);
-  mostrarToast(bobinas.length + " bobinas em " + totalEtiquetas + " etiquetas");
+  mostrarToast(".zpl exportado com sucesso");
 }
 
-window.exportarZPLZebra = exportarZPLZebra;
+function exportarCSVZebraMult(dataInicioP, dataFimP, qtdPorEtiqueta = 8) {
+  let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
+  if (bobinas.length === 0) { mostrarToast("Nenhuma bobina encontrada", "erro"); return; }
+  let cabecalho = [];
+  for (let i = 1; i <= qtdPorEtiqueta; i++) cabecalho.push(`qr${i}`, `desc${i}`);
+  let linhas = [cabecalho.join(",")];
+  for (let i = 0; i < bobinas.length; i += qtdPorEtiqueta) {
+    let linhaDados = [];
+    for (let j = 0; j < qtdPorEtiqueta; j++) {
+      let bob = bobinas[i + j];
+      if (bob) {
+        let desc = bob.item + "/" + bob.versao + " - " + bob.peso + "kg";
+        linhaDados.push('"' + bob.qrData.replace(/"/g, '""') + '"', '"' + desc.replace(/"/g, '""') + '"');
+      } else {
+        linhaDados.push('""', '""');
+      }
+    }
+    linhas.push(linhaDados.join(","));
+  }
+  let blob = new Blob([linhas.join("\n")], { type: "text/csv;charset=utf-8;" });
+  let link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `Zebra_${qtdPorEtiqueta}QR_` + getTimestamp() + ".csv";
+  link.click();
+  mostrarToast(`CSV exportado (${qtdPorEtiqueta} QR por etiqueta)`);
+}
+
 /* ================= NOVO MENU EXPORTAR ================= */
 
 let exportTipoSelecionado = 'estoque';
@@ -4446,60 +3402,45 @@ let exportFormatoSelecionado = 'excel';
 let exportUsarPeriodo = false;
 
 function selecionarTipoExport(card) {
-  // Remove seleção anterior
   document.querySelectorAll('#exportGrid .export-card').forEach(c => c.classList.remove('selecionado'));
   card.classList.add('selecionado');
-
   exportTipoSelecionado = card.dataset.tipo;
 
   let formatosNormal = document.getElementById('exportFormatosNormal');
   let formatosQR = document.getElementById('exportFormatosQR');
   let etapaPeriodo = document.getElementById('exportEtapaPeriodo');
 
-  // Mostra formatos corretos
   if (exportTipoSelecionado === 'qrcodes') {
     formatosNormal.classList.add('hidden');
     formatosQR.classList.remove('hidden');
     exportFormatoSelecionado = 'zpl';
-    // Reset seleção formato QR
     formatosQR.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
     formatosQR.querySelector('[data-formato="zpl"]').classList.add('selecionado');
   } else {
     formatosNormal.classList.remove('hidden');
     formatosQR.classList.add('hidden');
     exportFormatoSelecionado = 'excel';
-    // Reset seleção formato normal
     formatosNormal.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
     formatosNormal.querySelector('[data-formato="excel"]').classList.add('selecionado');
   }
 
-  // Período: mostra para histórico, ambos e qrcodes
-  if (exportTipoSelecionado === 'estoque') {
-    etapaPeriodo.classList.add('hidden');
-  } else {
-    etapaPeriodo.classList.remove('hidden');
-  }
+  if (exportTipoSelecionado === 'estoque') etapaPeriodo.classList.add('hidden');
+  else etapaPeriodo.classList.remove('hidden');
 }
 
 function selecionarFormato(btn) {
-  let container = btn.parentElement;
-  container.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
+  btn.parentElement.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
   btn.classList.add('selecionado');
   exportFormatoSelecionado = btn.dataset.formato;
 }
 
 function toggleExportPeriodo(usarPeriodo, btn) {
   exportUsarPeriodo = usarPeriodo;
-  let toggle = btn.parentElement;
-  toggle.querySelectorAll('button').forEach(b => b.classList.remove('selecionado'));
+  btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('selecionado'));
   btn.classList.add('selecionado');
-
   let datas = document.getElementById('exportPeriodoDatas');
-  if (usarPeriodo) {
-    datas.classList.remove('hidden');
-  } else {
-    datas.classList.add('hidden');
-  }
+  if (usarPeriodo) datas.classList.remove('hidden');
+  else datas.classList.add('hidden');
 }
 
 function resetarMenuExportar() {
@@ -4507,26 +3448,28 @@ function resetarMenuExportar() {
   exportFormatoSelecionado = 'excel';
   exportUsarPeriodo = false;
 
-  // Reset cards
   document.querySelectorAll('#exportGrid .export-card').forEach(c => c.classList.remove('selecionado'));
   let primeiro = document.querySelector('#exportGrid .export-card[data-tipo="estoque"]');
   if (primeiro) primeiro.classList.add('selecionado');
 
-  // Reset formatos
-  document.getElementById('exportFormatosNormal').classList.remove('hidden');
-  document.getElementById('exportFormatosQR').classList.add('hidden');
+  let formatosNormal = document.getElementById('exportFormatosNormal');
+  let formatosQR = document.getElementById('exportFormatosQR');
+  if (formatosNormal) formatosNormal.classList.remove('hidden');
+  if (formatosQR) formatosQR.classList.add('hidden');
+
   document.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
   let excelBtn = document.querySelector('#exportFormatosNormal [data-formato="excel"]');
   if (excelBtn) excelBtn.classList.add('selecionado');
 
-  // Reset período
-  document.getElementById('exportEtapaPeriodo').classList.add('hidden');
-  document.getElementById('exportPeriodoDatas').classList.add('hidden');
+  let etapaPeriodo = document.getElementById('exportEtapaPeriodo');
+  let periodoDatas = document.getElementById('exportPeriodoDatas');
+  if (etapaPeriodo) etapaPeriodo.classList.add('hidden');
+  if (periodoDatas) periodoDatas.classList.add('hidden');
+
   let toggleBtns = document.querySelectorAll('.export-periodo-toggle button');
   toggleBtns.forEach(b => b.classList.remove('selecionado'));
   if (toggleBtns[0]) toggleBtns[0].classList.add('selecionado');
 
-  // Limpa datas
   let di = document.getElementById('exportDataInicio');
   let df = document.getElementById('exportDataFim');
   if (di) di.value = '';
@@ -4534,25 +3477,15 @@ function resetarMenuExportar() {
 }
 
 function executarExportacaoNova() {
-  let dataInicioExp = null;
-  let dataFimExp = null;
-
+  let dataInicioExp = null, dataFimExp = null;
   if (exportUsarPeriodo) {
     dataInicioExp = document.getElementById('exportDataInicio').value;
     dataFimExp = document.getElementById('exportDataFim').value;
-    if (!dataInicioExp && !dataFimExp) {
-      mostrarToast('Informe pelo menos uma data', 'erro');
-      return;
-    }
+    if (!dataInicioExp && !dataFimExp) { mostrarToast('Informe pelo menos uma data', 'erro'); return; }
   }
 
-  // Validações
   if (exportTipoSelecionado === 'estoque') {
-    let temDados = Object.keys(estoque).some(k => !k.endsWith('_qtd'));
-    if (!temDados) {
-      mostrarToast('Estoque vazio', 'erro');
-      return;
-    }
+    if (!Object.keys(estoque).some(k => !k.endsWith('_qtd'))) { mostrarToast('Estoque vazio', 'erro'); return; }
   }
 
   if (exportTipoSelecionado === 'historico' || exportTipoSelecionado === 'ambos') {
@@ -4561,96 +3494,59 @@ function executarExportacaoNova() {
       let dataISO = h.data.split(',')[0].trim().split('/').reverse().join('-');
       return (!dataInicioExp || dataISO >= dataInicioExp) && (!dataFimExp || dataISO <= dataFimExp);
     });
-    if (dadosFiltrados.length === 0) {
-      mostrarToast('Nenhum registro no período', 'erro');
-      return;
-    }
+    if (dadosFiltrados.length === 0) { mostrarToast('Nenhum registro no período', 'erro'); return; }
   }
 
   if (exportTipoSelecionado === 'qrcodes') {
     let bobinas = coletarBobinasParaQR(dataInicioExp, dataFimExp);
-    if (bobinas.length === 0) {
-      mostrarToast('Nenhuma bobina encontrada', 'erro');
-      return;
-    }
-
+    if (bobinas.length === 0) { mostrarToast('Nenhuma bobina encontrada', 'erro'); return; }
     if (exportFormatoSelecionado === 'zpl') {
-  abrirPreviewEtiqueta(dataInicioExp, dataFimExp);
-  fecharModalConfig();
-  return;
-} else if (exportFormatoSelecionado === 'imagens') {
+      abrirPreviewEtiqueta(dataInicioExp, dataFimExp);
+      fecharModalConfig();
+      return;
+    } else if (exportFormatoSelecionado === 'imagens') {
       exportarQRCodesZIP(dataInicioExp, dataFimExp);
     } else if (exportFormatoSelecionado === 'csv') {
-      exportarCSVZebraMult(dataInicioExp, dataFimExp, 6);
+      exportarCSVZebraMult(dataInicioExp, dataFimExp, 8);
     }
-
     fecharModalConfig();
     return;
   }
 
-  // Estoque, Histórico, Ambos
   if (exportFormatoSelecionado === 'pdf') {
     if (exportTipoSelecionado === 'estoque') exportarEstoquePDF(dataInicioExp, dataFimExp);
     if (exportTipoSelecionado === 'historico') exportarHistoricoPDF(dataInicioExp, dataFimExp);
-    if (exportTipoSelecionado === 'ambos') {
-      exportarEstoquePDF(dataInicioExp, dataFimExp);
-      exportarHistoricoPDF(dataInicioExp, dataFimExp);
-    }
+    if (exportTipoSelecionado === 'ambos') { exportarEstoquePDF(dataInicioExp, dataFimExp); exportarHistoricoPDF(dataInicioExp, dataFimExp); }
   } else {
     if (exportTipoSelecionado === 'estoque') exportarEstoque(dataInicioExp, dataFimExp);
     if (exportTipoSelecionado === 'historico') exportarHistorico(dataInicioExp, dataFimExp);
     if (exportTipoSelecionado === 'ambos') exportarAmbos(dataInicioExp, dataFimExp);
   }
-
   fecharModalConfig();
 }
 
-// Sobrescreve a abertura para resetar
-let _abrirConfigExportarOriginal = window.abrirConfigExportar;
-window.abrirConfigExportar = function() {
-  document.getElementById('configTitulo').textContent = 'Exportar dados';
-  document.getElementById('configMenuPrincipal').classList.add('hidden');
-  document.getElementById('configTelaExportar').classList.remove('hidden');
-  resetarMenuExportar();
-};
-
-window.selecionarTipoExport = selecionarTipoExport;
-window.selecionarFormato = selecionarFormato;
-window.toggleExportPeriodo = toggleExportPeriodo;
-window.executarExportacaoNova = executarExportacaoNova;
-
-/* ================= PREVIEW ETIQUETA ZPL ================= */
+/* ================= PREVIEW ETIQUETA ================= */
 
 let previewDados = {
-  bobinas: [],
-  paginaAtual: 0,
-  totalPaginas: 0,
-  qrPorEtiqueta: 6,
-  dataInicio: null,
-  dataFim: null
+  bobinas: [], paginaAtual: 0, totalPaginas: 0,
+  qrPorEtiqueta: 8,
+  dataInicio: null, dataFim: null,
+  origem: null
 };
 
 function abrirPreviewEtiqueta(dataInicioP, dataFimP) {
   let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
-
-  if (bobinas.length === 0) {
-    mostrarToast('Nenhuma bobina encontrada', 'erro');
-    return;
-  }
-
+  if (bobinas.length === 0) { mostrarToast('Nenhuma bobina encontrada', 'erro'); return; }
   previewDados.bobinas = bobinas;
   previewDados.paginaAtual = 0;
   previewDados.totalPaginas = Math.ceil(bobinas.length / previewDados.qrPorEtiqueta);
   previewDados.dataInicio = dataInicioP;
   previewDados.dataFim = dataFimP;
+  previewDados.origem = 'exportar';
   document.getElementById('previewInfo').textContent =
-    '76.2 × 50.8 mm — ' + bobinas.length + ' bobina(s) em ' + previewDados.totalPaginas + ' etiqueta(s)';
-
+    '100 × 60 mm — ' + bobinas.length + ' bobina(s) em ' + previewDados.totalPaginas + ' etiqueta(s)';
   document.getElementById('modalPreviewEtiqueta').classList.remove('hidden');
-
-  gerarPreviewsQR(function() {
-    desenharPreviewPagina(0);
-  });
+  gerarPreviewsQR(function() { desenharPreviewPagina(0); });
 }
 
 function fecharPreviewEtiqueta() {
@@ -4674,77 +3570,44 @@ function previewProximaPagina() {
 
 function gerarPreviewsQR(callback) {
   let container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.left = '-9999px';
-  container.style.top = '0';
+  container.style.position = 'fixed'; container.style.left = '-9999px'; container.style.top = '0';
   document.body.appendChild(container);
-
   let pendentes = previewDados.bobinas.length;
+  if (pendentes === 0) { container.remove(); if (callback) callback(); return; }
 
-  if (pendentes === 0) {
-    container.remove();
-    if (callback) callback();
-    return;
-  }
+  let timeoutGlobal = setTimeout(() => { container.remove(); if (callback) callback(); }, 10000);
 
   previewDados.bobinas.forEach(function(bob, i) {
     let qrDiv = document.createElement('div');
-    qrDiv.id = 'prevQR_' + i;
     container.appendChild(qrDiv);
-
-    new QRCode(qrDiv, {
-      text: bob.qrData,
-      width: 200,
-      height: 200,
-      colorDark: '#000000',
-      colorLight: '#ffffff',
-      correctLevel: QRCode.CorrectLevel.M
-    });
-
+    new QRCode(qrDiv, { text: bob.qrData, width: 200, height: 200, colorDark: '#000000', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
     let tentativas = 0;
     let verificar = setInterval(function() {
       tentativas++;
       let canvas = qrDiv.querySelector('canvas');
       let img = qrDiv.querySelector('img');
-
       let resolvido = false;
-
-      if (canvas) {
-        bob._qrDataUrl = canvas.toDataURL('image/png');
-        resolvido = true;
-      } else if (img && img.complete && img.naturalWidth > 0) {
-        let c = document.createElement('canvas');
-        c.width = 200; c.height = 200;
-        let ctx = c.getContext('2d');
-        ctx.drawImage(img, 0, 0, 200, 200);
-        bob._qrDataUrl = c.toDataURL('image/png');
-        resolvido = true;
+      if (canvas) { bob._qrDataUrl = canvas.toDataURL('image/png'); resolvido = true; }
+      else if (img && img.complete && img.naturalWidth > 0) {
+        let c = document.createElement('canvas'); c.width = 200; c.height = 200;
+        c.getContext('2d').drawImage(img, 0, 0, 200, 200);
+        bob._qrDataUrl = c.toDataURL('image/png'); resolvido = true;
       } else if (img && !img.complete) {
         clearInterval(verificar);
         img.onload = function() {
-          let c = document.createElement('canvas');
-          c.width = 200; c.height = 200;
-          let ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0, 200, 200);
+          let c = document.createElement('canvas'); c.width = 200; c.height = 200;
+          c.getContext('2d').drawImage(img, 0, 0, 200, 200);
           bob._qrDataUrl = c.toDataURL('image/png');
           pendentes--;
-          if (pendentes <= 0) { container.remove(); if (callback) callback(); }
+          if (pendentes <= 0) { clearTimeout(timeoutGlobal); container.remove(); if (callback) callback(); }
         };
-        img.onerror = function() {
-          bob._qrDataUrl = '';
-          pendentes--;
-          if (pendentes <= 0) { container.remove(); if (callback) callback(); }
-        };
+        img.onerror = function() { bob._qrDataUrl = ''; pendentes--; if (pendentes <= 0) { clearTimeout(timeoutGlobal); container.remove(); if (callback) callback(); } };
         return;
-      } else if (tentativas > 50) {
-        bob._qrDataUrl = '';
-        resolvido = true;
-      }
-
+      } else if (tentativas > 50) { bob._qrDataUrl = ''; resolvido = true; }
       if (resolvido) {
         clearInterval(verificar);
         pendentes--;
-        if (pendentes <= 0) { container.remove(); if (callback) callback(); }
+        if (pendentes <= 0) { clearTimeout(timeoutGlobal); container.remove(); if (callback) callback(); }
       }
     }, 50);
   });
@@ -4754,97 +3617,72 @@ function desenharPreviewPagina(pagina) {
   let canvas = document.getElementById('previewCanvas');
   let ctx = canvas.getContext('2d');
 
-  let W = 610;
-  let H = 406;
-  canvas.width = W;
-  canvas.height = H;
+  // Dimensões atualizadas para 10x6 cm (799x480 pontos a 203 DPI)
+  let W = 799, H = 480;
+  canvas.width = W; canvas.height = H;
 
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
-
   ctx.strokeStyle = '#cbd5e1';
   ctx.lineWidth = 2;
   ctx.strokeRect(1, 1, W - 2, H - 2);
 
   let inicio = pagina * previewDados.qrPorEtiqueta;
-  let qtd = previewDados.qrPorEtiqueta;
-  let cols, qrMag, fontH;
 
-  if (qtd === 4) {
-    cols = 2;
-    qrMag = 5;
-    fontH = 20;
-  } else {
-    cols = 3;
-    qrMag = 4;
-    fontH = 16;
-  }
+  // Grade fixa: 4 colunas x 2 linhas = 8 bobinas
+  let cols = 4;
+  let linhas = 2;
+  let cellW = 199; // exato como no ZPL
+  let cellH = 240;
 
-  let linhas = Math.ceil(qtd / cols);
-  let cellW = Math.floor(W / cols);
-  let cellH = Math.floor(H / linhas);
-  let qrRealSize = (qrMag * 25) + (qrMag * 2);
-
-  // ===== DIVISÓRIAS =====
-
+  // Linhas verticais (tracejadas no preview, sólidas no ZPL real)
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 1;
   for (let c = 1; c < cols; c++) {
     let x = c * cellW;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeStyle = '#94a3b8';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
 
+  // Linha horizontal do meio
   for (let l = 1; l < linhas; l++) {
     let y = l * cellH;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeStyle = '#94a3b8';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(W, y);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-
   ctx.setLineDash([]);
 
-  // ===== QR CODES CENTRALIZADOS =====
+  // Tamanho do QR no preview (proporcional ao ZPL: mag=5)
+  let qrRealSize = (5 * 25) + (5 * 2); // = 135px
+  let fontH = 14; // tamanho de fonte no canvas do preview
 
   let imagensParaDesenhar = [];
 
-  for (let j = 0; j < qtd; j++) {
+  for (let j = 0; j < previewDados.qrPorEtiqueta; j++) {
     let bob = previewDados.bobinas[inicio + j];
     if (!bob) break;
 
     let col = j % cols;
     let lin = Math.floor(j / cols);
-
     let cellX = col * cellW;
     let cellY = lin * cellH;
 
-    let gap = 6;
-    let blocoAltura = qrRealSize + gap + fontH;
-    let blocoY = cellY + Math.floor((cellH - blocoAltura) / 2);
-    let qrX = cellX + Math.floor((cellW - qrRealSize) / 2);
-    let qrY = blocoY;
+    // Mesmas coordenadas relativas do ZPL
+    let qrX = cellX + 32;
+    let qrY = cellY + 18;
+    let textoY = cellY + 190 + fontH; // +fontH pois fillText usa baseline
 
-    let textoY = qrY + qrRealSize + gap + fontH;
-    let desc = bob.item + '/' + bob.versao + ' - ' + bob.peso;
-
-    // Texto centralizado
+    // Texto da bobina
+    let desc = bob.item + '/' + (bob.versao || '') + ' - ' + bob.peso;
     ctx.fillStyle = '#1e293b';
     ctx.font = 'bold ' + fontH + 'px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(desc, cellX + cellW / 2, textoY);
 
+    // QR Code
     if (bob._qrDataUrl) {
       imagensParaDesenhar.push({
         src: bob._qrDataUrl,
-        x: qrX,
-        y: qrY,
+        x: qrX, y: qrY,
         size: qrRealSize
       });
     } else {
@@ -4858,22 +3696,18 @@ function desenharPreviewPagina(pagina) {
     }
   }
 
-  // Info nos cantos
+  // Rodapé informativo
   ctx.fillStyle = '#cbd5e1';
   ctx.font = '10px Arial';
   ctx.textAlign = 'left';
-  ctx.fillText('76.2 x 50.8 mm', 6, H - 6);
+  ctx.fillText('100 x 60 mm', 6, H - 6);
   ctx.textAlign = 'right';
   ctx.fillText('203 DPI', W - 6, H - 6);
   ctx.textAlign = 'left';
 
-  // Desenha QR codes
+  // Desenha os QR codes após carregar as imagens
   let pendentes = imagensParaDesenhar.length;
-
-  if (pendentes === 0) {
-    atualizarNavPreview();
-    return;
-  }
+  if (pendentes === 0) { atualizarNavPreview(); return; }
 
   imagensParaDesenhar.forEach(function(item) {
     let img = new Image();
@@ -4889,25 +3723,801 @@ function desenharPreviewPagina(pagina) {
     img.src = item.src;
   });
 }
-function atualizarNavPreview() {
-  let paginaLabel = document.getElementById('previewPagina');
-  paginaLabel.textContent = (previewDados.paginaAtual + 1) + ' / ' + previewDados.totalPaginas;
 
+function atualizarNavPreview() {
+  document.getElementById('previewPagina').textContent = (previewDados.paginaAtual + 1) + ' / ' + previewDados.totalPaginas;
   let btns = document.querySelectorAll('.preview-etiqueta-nav button');
   if (btns[0]) btns[0].disabled = (previewDados.paginaAtual <= 0);
   if (btns[1]) btns[1].disabled = (previewDados.paginaAtual >= previewDados.totalPaginas - 1);
 }
 
 function confirmarExportZPL() {
+  if (geradorBobinas.length > 0) {
+    fecharPreviewEtiqueta();
+    geradorGerarZPL();
+    return;
+  }
+
+  let veioDosPendentes = !document.getElementById('modalPendentes').classList.contains('hidden');
+
+  if (veioDosPendentes && etiquetasPendentes.length > 0) {
+    fecharPreviewEtiqueta();
+    let lista = etiquetasPendentes.map(p => ({
+      qrData: 'BOB/' + p.item + '/' + p.versao + '/' + Math.round(p.peso) + '/' + p.idCurto,
+      desc: p.item + '/' + p.versao + ' - ' + p.peso
+    }));
+    if (lista.length === 0) { mostrarToast('Nenhuma bobina para exportar', 'erro'); return; }
+    let zpl = montarZPLDeLista(lista, previewDados.qrPorEtiqueta || 8);
+    let blob = new Blob([zpl], { type: 'application/octet-stream' });
+    let link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'Etiquetas_Pendentes_' + getTimestamp() + '.zpl';
+    link.click();
+  mostrarToast('.zpl exportado');
+    return;
+  }
+
+  let di = previewDados.dataInicio;
+  let df = previewDados.dataFim;
   fecharPreviewEtiqueta();
-  exportarZPLZebra(previewDados.dataInicio, previewDados.dataFim);
+  exportarZPLZebra(di, df);
 }
 
-window.abrirPreviewEtiqueta = abrirPreviewEtiqueta;
-window.fecharPreviewEtiqueta = fecharPreviewEtiqueta;
-window.previewPaginaAnterior = previewPaginaAnterior;
-window.previewProximaPagina = previewProximaPagina;
-window.confirmarExportZPL = confirmarExportZPL;
+/* ================= GERADOR DE ETIQUETAS ================= */
+
+let geradorBobinas = [];
+let geradorEditandoIndex = null;
+let geradorGrupoAberto = null;
+
+function fecharGerador() { document.getElementById('modalGerador').classList.add('hidden'); }
+
+function abrirGerador() {
+  fecharModalConfig();
+  if (geradorBobinas.length === 0 && etiquetasPendentes.length > 0) {
+    if (confirm('Você tem ' + etiquetasPendentes.length + ' etiqueta(s) pendente(s).\n\nDeseja verificar?')) {
+      abrirPendentes(); return;
+    }
+  }
+  document.getElementById('modalGerador').classList.remove('hidden');
+  geradorIrPasso(1);
+  geradorLimparCampos();
+  let busca = document.getElementById('geradorBusca');
+  if (busca) busca.value = '';
+  geradorRenderizarLista1();
+}
+
+function geradorConcluir() {
+  if (geradorBobinas.length === 0) { mostrarToast('Nenhuma bobina para salvar', 'erro'); return; }
+  adicionarPendentes(geradorBobinas);
+  let total = geradorBobinas.reduce((acc, b) => acc + b.qtd, 0);
+  
+  document.getElementById('geradorBotoesAntes').classList.add('hidden');
+  document.getElementById('geradorBotoesDepois').classList.remove('hidden');
+  
+  let resumo = document.getElementById('geradorExportTotal');
+  if (resumo) resumo.textContent = '✅ ' + total + ' etiqueta(s) salva(s)!';
+  
+  if (navigator.vibrate) navigator.vibrate([100]);
+  mostrarToast(total + ' etiqueta(s) salva(s) como pendentes');
+}
+
+function geradorCancelar() {
+  let concluiu = !document.getElementById('geradorBotoesDepois').classList.contains('hidden');
+
+  if (concluiu) {
+    geradorResetarTudo();
+    document.getElementById('modalGerador').classList.add('hidden');
+    return;
+  }
+
+  if (geradorBobinas.length > 0) {
+    if (!confirm('Descartar ' + geradorBobinas.reduce((a, b) => a + b.qtd, 0) + ' etiqueta(s)?')) return;
+  }
+
+  geradorResetarTudo();
+  document.getElementById('modalGerador').classList.add('hidden');
+  mostrarToast('Etiquetas descartadas');
+}
+
+function geradorFecharFinal() {
+  geradorResetarTudo();
+  document.getElementById('modalGerador').classList.add('hidden');
+}
+
+function geradorFecharSimples() {
+  let concluiu = !document.getElementById('geradorBotoesDepois').classList.contains('hidden');
+
+  if (concluiu) {
+    geradorResetarTudo();
+    document.getElementById('modalGerador').classList.add('hidden');
+    return;
+  }
+
+  if (geradorBobinas.length > 0) {
+    if (!confirm('Descartar ' + geradorBobinas.reduce((a, b) => a + b.qtd, 0) + ' etiqueta(s)?')) return;
+  }
+
+  geradorResetarTudo();
+  document.getElementById('modalGerador').classList.add('hidden');
+}
+
+function geradorResetarTudo() {
+  geradorBobinas = [];
+  geradorEditandoIndex = null;
+  geradorGrupoAberto = null;
+  geradorLimparCampos();
+  let busca = document.getElementById('geradorBusca');
+  if (busca) busca.value = '';
+  let sug = document.getElementById('geradorSugestoes');
+  if (sug) { sug.innerHTML = ''; sug.classList.add('hidden'); }
+  let antes = document.getElementById('geradorBotoesAntes');
+  let depois = document.getElementById('geradorBotoesDepois');
+  if (antes) antes.classList.remove('hidden');
+  if (depois) depois.classList.add('hidden');
+}
+
+function geradorIrPasso(passo) {
+  geradorGrupoAberto = null;
+  document.getElementById('geradorPasso1').classList.add('hidden');
+  document.getElementById('geradorPasso2').classList.add('hidden');
+  document.getElementById('geradorPasso' + passo).classList.remove('hidden');
+  document.querySelectorAll('.gerador-passo').forEach(el => {
+    let p = parseInt(el.dataset.passo);
+    el.classList.remove('ativo', 'completo');
+    if (p === passo) el.classList.add('ativo');
+    else if (p < passo) el.classList.add('completo');
+  });
+  if (passo === 1) { geradorRenderizarLista1(); geradorAtualizarResumoTotal(); }
+  if (passo === 2) {
+    let antes = document.getElementById('geradorBotoesAntes');
+    let depois = document.getElementById('geradorBotoesDepois');
+    if (antes) antes.classList.remove('hidden');
+    if (depois) depois.classList.add('hidden');
+    geradorRenderizarLista2();
+    geradorRenderizarPasso3();
+  }
+}
+
+function geradorIrPassoClicavel(passo) {
+  if (passo >= 2 && geradorBobinas.length === 0) { mostrarToast('Adicione pelo menos uma bobina', 'erro'); return; }
+  geradorIrPasso(passo);
+}
+
+function geradorAvancar(passo) {
+  if (geradorBobinas.length === 0) { mostrarToast('Adicione pelo menos uma bobina', 'erro'); return; }
+  geradorIrPasso(passo);
+}
+
+function geradorVoltar(passo) { geradorIrPasso(passo); }
+
+function geradorSelecionouVersao() {
+  let tipoEl = document.getElementById('geradorTipo');
+  let itemEl = document.getElementById('geradorItem');
+  let versaoEl = document.getElementById('geradorVersao');
+  let buscaEl = document.getElementById('geradorBusca');
+  let pesoEl = document.getElementById('geradorPeso');
+  if (!versaoEl || !versaoEl.value) return;
+  let tipo = tipoEl ? tipoEl.value : '';
+  let item = itemEl ? itemEl.value : '';
+  let versao = versaoEl.value;
+  let tamanho = '';
+  if (tipo && item && versao && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
+    tamanho = banco[tipo][item][versao].tamanho;
+  }
+  if (buscaEl && item) buscaEl.value = item + ' - V' + versao + ' (' + tamanho + ')';
+  if (pesoEl) pesoEl.focus();
+}
+
+function geradorLimparCampos() {
+  ['geradorTipo', 'geradorPeso'].forEach(id => { let el = document.getElementById(id); if (el) el.value = ''; });
+  let el = document.getElementById('geradorItem');
+  if (el) el.innerHTML = '<option value="">Selecionar item</option>';
+  el = document.getElementById('geradorVersao');
+  if (el) el.innerHTML = '<option value="">Selecionar versão</option>';
+  el = document.getElementById('geradorQtd');
+  if (el) el.value = '1';
+  geradorEditandoIndex = null;
+}
+
+function geradorFiltrarTipo() {
+  let tipoEl = document.getElementById('geradorTipo');
+  let itemEl = document.getElementById('geradorItem');
+  let versaoEl = document.getElementById('geradorVersao');
+  if (!tipoEl || !itemEl || !versaoEl) return;
+  let tipo = tipoEl.value;
+  itemEl.innerHTML = '<option value="">Selecionar item</option>';
+  versaoEl.innerHTML = '<option value="">Selecionar versão</option>';
+  if (!banco[tipo]) return;
+  Object.keys(banco[tipo]).forEach(item => {
+    let opt = document.createElement('option');
+    opt.value = item; opt.textContent = item;
+    itemEl.appendChild(opt);
+  });
+  let busca = document.getElementById('geradorBusca');
+  if (busca) busca.value = '';
+}
+
+function geradorFiltrarItem() {
+  let tipoEl = document.getElementById('geradorTipo');
+  let itemEl = document.getElementById('geradorItem');
+  let versaoEl = document.getElementById('geradorVersao');
+  if (!tipoEl || !itemEl || !versaoEl) return;
+  let tipo = tipoEl.value, item = itemEl.value;
+  versaoEl.innerHTML = '<option value="">Selecionar versão</option>';
+  if (!banco[tipo] || !banco[tipo][item]) return;
+  Object.keys(banco[tipo][item]).forEach(v => {
+    let tamanho = banco[tipo][item][v].tamanho;
+    let opt = document.createElement('option');
+    opt.value = v; opt.textContent = v + " (" + tamanho + ")";
+    versaoEl.appendChild(opt);
+  });
+  let busca = document.getElementById('geradorBusca');
+  if (busca) busca.value = '';
+}
+
+function geradorFiltrarBusca() {
+  let termo = document.getElementById('geradorBusca').value.toLowerCase();
+  let sugestoes = document.getElementById('geradorSugestoes');
+  sugestoes.innerHTML = '';
+  if (!termo) { sugestoes.classList.add('hidden'); return; }
+  Object.keys(banco).forEach(tipo => {
+    Object.keys(banco[tipo]).forEach(item => {
+      Object.keys(banco[tipo][item]).forEach(versao => {
+        let tamanho = banco[tipo][item][versao].tamanho;
+        let textoCompleto = item + " - V" + versao + " (" + tamanho + ")";
+        if (textoCompleto.toLowerCase().includes(termo)) {
+          let d = document.createElement('div');
+          d.textContent = textoCompleto;
+          d.onclick = function() {
+            document.getElementById('geradorTipo').value = tipo;
+            geradorFiltrarTipo();
+            document.getElementById('geradorItem').value = item;
+            geradorFiltrarItem();
+            document.getElementById('geradorVersao').value = versao;
+            document.getElementById('geradorBusca').value = textoCompleto;
+            sugestoes.classList.add('hidden');
+            document.getElementById('geradorPeso').focus();
+          };
+          sugestoes.appendChild(d);
+        }
+      });
+    });
+  });
+  sugestoes.classList.remove('hidden');
+}
+
+function geradorLimparBusca() {
+  document.getElementById('geradorBusca').value = '';
+  document.getElementById('geradorSugestoes').innerHTML = '';
+  document.getElementById('geradorSugestoes').classList.add('hidden');
+  geradorLimparCampos();
+}
+
+function geradorAdicionar() {
+  let tipoEl = document.getElementById('geradorTipo');
+  let itemEl = document.getElementById('geradorItem');
+  let versaoEl = document.getElementById('geradorVersao');
+  let pesoEl = document.getElementById('geradorPeso');
+  let qtdEl = document.getElementById('geradorQtd');
+  if (!tipoEl || !itemEl || !versaoEl || !pesoEl) return;
+  let tipo = tipoEl.value, item = itemEl.value, versao = versaoEl.value;
+  let peso = parseFloat(pesoEl.value);
+  let qtd = qtdEl ? (parseInt(qtdEl.value) || 1) : 1;
+  let faltando = [];
+  if (!tipo) faltando.push('tipo');
+  if (!item) faltando.push('item');
+  if (!versao) faltando.push('versão');
+  if (!peso || peso <= 0) faltando.push('peso');
+  if (faltando.length > 0) { mostrarToast('Informe: ' + faltando.join(', '), 'erro'); return; }
+  let tamanho = '';
+  if (banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) tamanho = banco[tipo][item][versao].tamanho;
+  if (geradorEditandoIndex !== null) {
+    geradorBobinas[geradorEditandoIndex] = { tipo, item, versao, tamanho, peso, qtd, ids: geradorGerarIds(qtd) };
+    geradorEditandoIndex = null;
+    mostrarToast('Bobina atualizada');
+  } else {
+    geradorBobinas.push({ tipo, item, versao, tamanho, peso, qtd, ids: geradorGerarIds(qtd) });
+    mostrarToast('Adicionada');
+  }
+  geradorLimparCampos();
+  let busca = document.getElementById('geradorBusca');
+  if (busca) busca.value = '';
+  geradorRenderizarLista1();
+  if (navigator.vibrate) navigator.vibrate([50]);
+}
+
+function geradorRepetirUltimo() {
+  if (geradorBobinas.length === 0) { mostrarToast('Nenhuma bobina para repetir', 'erro'); return; }
+  let ultima = geradorBobinas[geradorBobinas.length - 1];
+  let el;
+  el = document.getElementById('geradorTipo'); if (el) { el.value = ultima.tipo; geradorFiltrarTipo(); }
+  el = document.getElementById('geradorItem'); if (el) { el.value = ultima.item; geradorFiltrarItem(); }
+  el = document.getElementById('geradorVersao'); if (el) el.value = ultima.versao;
+  el = document.getElementById('geradorQtd'); if (el) el.value = ultima.qtd;
+  let busca = document.getElementById('geradorBusca');
+  if (busca) busca.value = ultima.item + ' - V' + ultima.versao + ' (' + (ultima.tamanho || '') + ')';
+  el = document.getElementById('geradorPeso'); if (el) { el.value = ''; el.focus(); }
+}
+
+function geradorGerarIds(qtd) {
+  let ids = [];
+  for (let i = 0; i < qtd; i++) ids.push(crypto.randomUUID());
+  return ids;
+}
+
+function geradorEditar(index) {
+  let bob = geradorBobinas[index];
+  if (!bob) return;
+  let el;
+  el = document.getElementById('geradorTipo'); if (el) { el.value = bob.tipo; geradorFiltrarTipo(); }
+  el = document.getElementById('geradorItem'); if (el) { el.value = bob.item; geradorFiltrarItem(); }
+  el = document.getElementById('geradorVersao'); if (el) el.value = bob.versao;
+  el = document.getElementById('geradorPeso'); if (el) el.value = bob.peso;
+  el = document.getElementById('geradorQtd'); if (el) el.value = bob.qtd;
+  geradorEditandoIndex = index;
+  geradorIrPasso(1);
+}
+
+function geradorRemover(index) {
+  geradorBobinas.splice(index, 1);
+  geradorRenderizarLista1();
+  geradorAtualizarResumoTotal();
+  mostrarToast(geradorBobinas.length === 0 ? 'Lista vazia' : 'Removida');
+}
+
+function geradorRemoverBobina(chaveGrupo, bobinaIndex) {
+  let partes = chaveGrupo.split('|');
+  let tipo = partes[0], item = partes[1], versao = partes[2];
+  let contador = 0;
+  for (let i = 0; i < geradorBobinas.length; i++) {
+    let bob = geradorBobinas[i];
+    if (bob.tipo === tipo && bob.item === item && bob.versao === versao) {
+      for (let j = 0; j < bob.ids.length; j++) {
+        if (contador === bobinaIndex) {
+          bob.ids.splice(j, 1); bob.qtd--;
+          if (bob.ids.length === 0) geradorBobinas.splice(i, 1);
+          geradorAtualizarResumoTotal();
+          geradorGrupoAberto = geradorBobinas.length > 0 ? chaveGrupo : null;
+          geradorRenderizarLista1();
+          mostrarToast(geradorBobinas.length === 0 ? 'Lista vazia' : 'Bobina removida');
+          return;
+        }
+        contador++;
+      }
+    }
+  }
+}
+
+function geradorEditarBobina(chaveGrupo, bobinaIndex) {
+  let partes = chaveGrupo.split('|');
+  let tipo = partes[0], item = partes[1], versao = partes[2];
+  let contador = 0, bobinaAlvo = null, grupoAlvo = null, grupoIndex = -1, idIndex = -1;
+  for (let i = 0; i < geradorBobinas.length; i++) {
+    let bob = geradorBobinas[i];
+    if (bob.tipo === tipo && bob.item === item && bob.versao === versao) {
+      for (let j = 0; j < bob.ids.length; j++) {
+        if (contador === bobinaIndex) { bobinaAlvo = { peso: bob.peso, id: bob.ids[j] }; grupoAlvo = bob; grupoIndex = i; idIndex = j; break; }
+        contador++;
+      }
+      if (bobinaAlvo) break;
+    }
+  }
+  if (!bobinaAlvo) return;
+  let novoPeso = prompt("Novo peso (kg):", bobinaAlvo.peso);
+  if (novoPeso === null) return;
+  novoPeso = parseFloat(novoPeso);
+  if (isNaN(novoPeso) || novoPeso <= 0) { mostrarToast('Peso inválido', 'erro'); return; }
+  if (novoPeso === bobinaAlvo.peso) return;
+  let idMantido = grupoAlvo.ids[idIndex], tamanhoSalvo = grupoAlvo.tamanho;
+  grupoAlvo.ids.splice(idIndex, 1); grupoAlvo.qtd--;
+  if (grupoAlvo.ids.length === 0) geradorBobinas.splice(grupoIndex, 1);
+  let grupoDestino = geradorBobinas.find(bob => bob.tipo === tipo && bob.item === item && bob.versao === versao && bob.peso === novoPeso);
+  if (grupoDestino) { grupoDestino.ids.push(idMantido); grupoDestino.qtd++; }
+  else {
+    geradorBobinas.splice(Math.min(grupoIndex, geradorBobinas.length), 0, { tipo, item, versao, tamanho: tamanhoSalvo, peso: novoPeso, qtd: 1, ids: [idMantido] });
+  }
+  geradorAtualizarResumoTotal();
+  geradorGrupoAberto = chaveGrupo;
+  geradorRenderizarLista1();
+  mostrarToast('Peso atualizado');
+}
+
+function geradorAddAoGrupo(chaveGrupo) {
+  let partes = chaveGrupo.split('|');
+  let el;
+  el = document.getElementById('geradorTipo'); if (el) { el.value = partes[0]; geradorFiltrarTipo(); }
+  el = document.getElementById('geradorItem'); if (el) { el.value = partes[1]; geradorFiltrarItem(); }
+  el = document.getElementById('geradorVersao'); if (el) el.value = partes[2];
+  el = document.getElementById('geradorQtd'); if (el) el.value = '1';
+  el = document.getElementById('geradorPeso'); if (el) { el.value = ''; el.focus(); }
+  geradorIrPasso(1);
+}
+
+function geradorToggleCard(el) {
+  let card = el.closest('.gerador-card');
+  card.classList.toggle('aberto');
+  if (!card.classList.contains('aberto')) geradorGrupoAberto = null;
+}
+
+function geradorRenderizarLista(containerId, comAcoes) {
+  let container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = '';
+  if (geradorBobinas.length === 0) {
+    container.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:13px; padding:12px;">Nenhuma bobina adicionada</div>';
+    return;
+  }
+  let grupos = {};
+  geradorBobinas.forEach((bob, idx) => {
+    let chave = bob.tipo + '|' + bob.item + '|' + bob.versao;
+    if (!grupos[chave]) grupos[chave] = { tipo: bob.tipo, item: bob.item, versao: bob.versao, tamanho: bob.tamanho, bobinas: [] };
+    bob.ids.forEach((id, subIdx) => { grupos[chave].bobinas.push({ peso: bob.peso, id, origemIndex: idx, origemSubIndex: subIdx }); });
+  });
+
+  Object.keys(grupos).forEach(chave => {
+    let grupo = grupos[chave];
+    let qtdBobinas = grupo.bobinas.length;
+    let pesoTotal = grupo.bobinas.reduce((acc, b) => acc + b.peso, 0);
+    let classTipo = 'tipo-' + grupo.tipo;
+    let nomeTipo = nomeBonitoTipo(grupo.tipo);
+
+    let card = document.createElement('div');
+    card.className = 'gerador-card';
+    if (geradorGrupoAberto === chave) card.classList.add('aberto');
+
+    let bobinasHTML = '';
+    grupo.bobinas.forEach((bob, bIdx) => {
+      let acoesBtns = comAcoes ? `
+        <div class="gerador-bobina-acoes">
+          <button class="btn-editar-opcao" onclick="event.stopPropagation(); geradorEditarBobina('${chave}', ${bIdx})" title="Editar">✏️</button>
+          <button class="btn-excluir-opcao" onclick="event.stopPropagation(); geradorRemoverBobina('${chave}', ${bIdx})" title="Remover">🗑</button>
+        </div>
+      ` : '';
+      bobinasHTML += `
+        <div class="gerador-bobina-linha">
+          <span class="gerador-bobina-num">${bIdx + 1}</span>
+          <span class="gerador-bobina-peso">${bob.peso} kg</span>
+          ${acoesBtns}
+        </div>
+      `;
+    });
+
+    card.innerHTML = `
+      <div class="gerador-card-header" onclick="geradorToggleCard(this)">
+        <div style="flex:1; min-width:0;">
+          <div>
+            <span class="gerador-card-tipo ${classTipo}">${nomeTipo}</span>
+            <span class="gerador-card-peso">${formatarPeso(pesoTotal)} kg</span>
+          </div>
+          <div class="gerador-card-detalhe">${grupo.item} / V${grupo.versao} · ${grupo.tamanho}</div>
+        </div>
+        <span class="gerador-card-qtd">×${qtdBobinas}</span>
+        <span class="gerador-card-seta">▶</span>
+      </div>
+      <div class="gerador-card-body">${bobinasHTML}</div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function geradorRenderizarLista1() { geradorRenderizarLista('geradorLista1', true); geradorAtualizarResumoTotal(); }
+function geradorRenderizarLista2() { geradorRenderizarLista('geradorLista2', false); }
+
+function geradorRenderizarPasso3() {
+  let el = document.getElementById('geradorExportTotal');
+  if (el) el.textContent = geradorBobinas.reduce((acc, b) => acc + b.qtd, 0) + ' etiqueta(s) pronta(s)';
+}
+
+function geradorAtualizarResumoTotal() {
+  let total = geradorBobinas.reduce((acc, b) => acc + b.qtd, 0);
+  let elResumo = document.getElementById('geradorResumoTotal');
+  if (elResumo) elResumo.textContent = total === 0 ? 'Nenhuma etiqueta' : total + ' etiqueta(s)';
+  let elExport = document.getElementById('geradorExportTotal');
+  if (elExport) elExport.textContent = total + ' etiqueta(s) pronta(s)';
+}
+
+function geradorMontarZPL() {
+  let todas = [];
+  geradorBobinas.forEach(bob => {
+    bob.ids.forEach(id => {
+      let idCurto = id.replace(/-/g, '').substring(0, 8);
+      todas.push({ qrData: 'BOB/' + bob.item + '/' + bob.versao + '/' + Math.round(bob.peso) + '/' + idCurto, desc: bob.item + '/' + bob.versao + ' - ' + bob.peso });
+    });
+  });
+  return montarZPLDeLista(todas, 8);
+}
+
+function geradorGerarZPL() {
+  let zpl = geradorMontarZPL();
+  let total = geradorBobinas.reduce((acc, b) => acc + b.qtd, 0);
+  let blob = new Blob([zpl], { type: 'application/octet-stream' });
+  let link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'Etiquetas_' + total + '_' + getTimestamp() + '.zpl';
+  link.click();
+  mostrarToast('Arquivo .zpl gerado');
+}
+
+function geradorCopiarZPL() {
+  let zpl = geradorMontarZPL();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(zpl).then(() => {
+      mostrarToast('Código .zpl copiado para a área de transferência!');
+      if (navigator.vibrate) navigator.vibrate([50]);
+    }).catch(() => { geradorCopiarFallback(zpl); });
+  } else { geradorCopiarFallback(zpl); }
+}
+
+function geradorCopiarFallback(texto) {
+  let textarea = document.createElement('textarea');
+  textarea.value = texto;
+  textarea.style.position = 'fixed'; textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try { document.execCommand('copy'); mostrarToast('ZPL copiado para a área de transferência'); }
+  catch (e) { mostrarToast('Não foi possível copiar', 'erro'); }
+  document.body.removeChild(textarea);
+}
+
+function geradorVisualizarZPL() {
+  let todas = [];
+  geradorBobinas.forEach(bob => {
+    bob.ids.forEach(id => {
+      let idCurto = id.replace(/-/g, '').substring(0, 8);
+      todas.push({ qrData: bob.item + '/' + bob.versao + '/' + Math.round(bob.peso) + '/' + idCurto, item: bob.item, versao: bob.versao, peso: bob.peso });
+    });
+  });
+  if (todas.length === 0) { mostrarToast('Nenhuma etiqueta para visualizar', 'erro'); return; }
+  previewDados.bobinas = todas;
+  previewDados.paginaAtual = 0;
+  previewDados.totalPaginas = Math.ceil(todas.length / 8);
+  previewDados.origem = 'gerador';
+  document.getElementById('previewInfo').textContent = '100 × 60 mm — ' + todas.length + ' bobina(s) em ' + previewDados.totalPaginas + ' etiqueta(s)';
+  document.getElementById('modalPreviewEtiqueta').classList.remove('hidden');
+  gerarPreviewsQR(function() { desenharPreviewPagina(0); });
+}
+
+/* ================= ETIQUETAS PENDENTES ================= */
+
+function carregarPendentes() {
+  let salvo = localStorage.getItem('etiquetasPendentes');
+  if (salvo) { try { etiquetasPendentes = JSON.parse(salvo); } catch (e) { etiquetasPendentes = []; } }
+  atualizarBotaoPendentesConfig();
+}
+
+function salvarPendentes() {
+  localStorage.setItem('etiquetasPendentes', JSON.stringify(etiquetasPendentes));
+  atualizarBotaoPendentesConfig();
+}
+
+function atualizarBotaoPendentesConfig() {
+  let contador = document.getElementById('btnPendentesContador');
+  if (!contador) return;
+  if (etiquetasPendentes.length === 0) {
+    contador.style.display = 'none';
+  } else {
+    contador.textContent = '(Pendentes: ' + etiquetasPendentes.length + ')';
+    contador.style.display = 'inline';
+  }
+}
+
+function adicionarPendentes(bobinas) {
+  bobinas.forEach(bob => {
+    bob.ids.forEach(id => {
+      etiquetasPendentes.push({
+        id, idCurto: id.replace(/-/g, '').substring(0, 8),
+        tipo: bob.tipo, item: bob.item, versao: bob.versao,
+        tamanho: bob.tamanho, peso: bob.peso,
+        dataCriacao: new Date().toLocaleString()
+      });
+    });
+  });
+  salvarPendentes();
+}
+
+function removerPendentePorId(bobinaId) {
+  if (!bobinaId) return;
+  let idStr = String(bobinaId);
+  let idCurto = idStr.includes('-') ? idStr.replace(/-/g, '').substring(0, 8) : (idStr.length === 8 ? idStr : idStr.replace(/-/g, '').substring(0, 8));
+  let tamanhoAntes = etiquetasPendentes.length;
+  etiquetasPendentes = etiquetasPendentes.filter(p => {
+    if (p.idCurto === idCurto) return false;
+    if (p.id === idStr) return false;
+    if (idStr.replace(/-/g, '').startsWith(p.idCurto)) return false;
+    return true;
+  });
+  if (etiquetasPendentes.length < tamanhoAntes) salvarPendentes();
+}
+
+function removerPendentePorIndex(index) {
+  if (index < 0 || index >= etiquetasPendentes.length) return;
+  let p = etiquetasPendentes[index];
+  let chaveGrupo = p ? (p.tipo + '|' + p.item + '|' + p.versao) : null;
+  etiquetasPendentes.splice(index, 1);
+  salvarPendentes();
+  renderizarPendentes();
+  if (etiquetasPendentes.length === 0) { fecharPendentes(); mostrarToast('Todas as pendentes foram removidas'); }
+  else {
+    mostrarToast('Pendente removida');
+    if (chaveGrupo) {
+      document.querySelectorAll('#pendentesLista .gerador-card').forEach(card => {
+        let resumo = card.querySelector('.gerador-card-resumo');
+        if (!resumo) return;
+        let partesCh = chaveGrupo.split('|');
+        if (resumo.textContent.includes(partesCh[1] + ' / V' + partesCh[2])) card.classList.add('aberto');
+      });
+    }
+  }
+}
+
+function abrirPendentes() {
+  fecharModalConfig();
+  document.getElementById('modalPendentes').classList.remove('hidden');
+  renderizarPendentes();
+}
+
+function fecharPendentes() { document.getElementById('modalPendentes').classList.add('hidden'); }
+
+function renderizarPendentes() {
+  let container = document.getElementById('pendentesLista');
+  let totalEl = document.getElementById('pendentesTotal');
+  container.innerHTML = '';
+  if (totalEl) totalEl.textContent = etiquetasPendentes.length + ' pendente(s)';
+  if (etiquetasPendentes.length === 0) {
+    container.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:13px; padding:12px;">Nenhuma etiqueta pendente</div>';
+    return;
+  }
+  let grupos = {};
+  etiquetasPendentes.forEach((p, idx) => {
+    let chave = p.tipo + '|' + p.item + '|' + p.versao;
+    if (!grupos[chave]) grupos[chave] = { tipo: p.tipo, item: p.item, versao: p.versao, tamanho: p.tamanho, pendentes: [] };
+    grupos[chave].pendentes.push({ ...p, indexReal: idx });
+  });
+
+  Object.keys(grupos).forEach(chave => {
+    let grupo = grupos[chave];
+    let pesoTotal = grupo.pendentes.reduce((acc, p) => acc + p.peso, 0);
+    let qtd = grupo.pendentes.length;
+    let card = document.createElement('div');
+    card.className = 'gerador-card';
+    let bobinasHTML = '';
+    grupo.pendentes.forEach((p, bIdx) => {
+      bobinasHTML += `
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid #f1f5f9;">
+          <span style="font-size:12px;"><strong>Bobina ${bIdx + 1}:</strong> ${p.peso} kg <span style="font-size:10px; color:#94a3b8; margin-left:4px;">${p.dataCriacao}</span></span>
+          <button class="btn-excluir-opcao" style="width:auto; padding:2px 8px; font-size:11px; height:26px; min-width:0;" onclick="event.stopPropagation(); removerPendentePorIndex(${p.indexReal})">🗑</button>
+        </div>
+      `;
+    });
+    card.innerHTML = `
+      <div class="gerador-card-header" onclick="geradorToggleCard(this)">
+        <span class="gerador-card-resumo">${grupo.item} / V${grupo.versao} — ${formatarPeso(pesoTotal)}kg</span>
+        <span class="gerador-card-qtd">Bobinas: ${qtd}</span>
+        <span class="gerador-card-seta">▶</span>
+      </div>
+      <div class="gerador-card-body">
+        <div><strong>Tipo:</strong> ${nomeCompletoTipo(grupo.tipo)}</div>
+        <div><strong>Item:</strong> ${grupo.item}</div>
+        <div><strong>Versão:</strong> ${grupo.versao} (${grupo.tamanho})</div>
+        <div style="margin-top:6px; font-weight:600; font-size:12px; color:#1e3a8a;">Bobinas:</div>
+        ${bobinasHTML}
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function pendentesMontarZPL() {
+  let lista = etiquetasPendentes.map(p => ({
+    qrData: 'BOB/' + p.item + '/' + p.versao + '/' + Math.round(p.peso) + '/' + p.idCurto,
+    desc: p.item + '/' + p.versao + ' - ' + p.peso
+  }));
+  return montarZPLDeLista(lista, 8);
+}
+
+function pendentesVisualizarZPL() {
+  if (etiquetasPendentes.length === 0) { mostrarToast('Nenhuma pendente', 'erro'); return; }
+  let todas = etiquetasPendentes.map(p => ({
+    qrData: p.item + '/' + p.versao + '/' + Math.round(p.peso) + '/' + p.idCurto,
+    item: p.item, versao: p.versao, peso: p.peso
+  }));
+  previewDados.bobinas = todas;
+  previewDados.paginaAtual = 0;
+  previewDados.totalPaginas = Math.ceil(todas.length / 8);
+  previewDados.origem = 'pendentes';
+  document.getElementById('previewInfo').textContent = '100 × 60 mm — ' + todas.length + ' bobina(s) em ' + previewDados.totalPaginas + ' etiqueta(s)';
+  document.getElementById('modalPreviewEtiqueta').classList.remove('hidden');
+  gerarPreviewsQR(function() { desenharPreviewPagina(0); });
+}
+
+function pendentesCopiarZPL() {
+  if (etiquetasPendentes.length === 0) { mostrarToast('Nenhuma pendente', 'erro'); return; }
+  let zpl = pendentesMontarZPL();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(zpl).then(() => {
+      mostrarToast('ZPL das pendentes copiado');
+      if (navigator.vibrate) navigator.vibrate([50]);
+    }).catch(() => { geradorCopiarFallback(zpl); });
+  } else { geradorCopiarFallback(zpl); }
+}
+
+function pendentesLimparTudo() {
+  if (etiquetasPendentes.length === 0) return;
+  if (!confirm('Remover todas as ' + etiquetasPendentes.length + ' etiquetas pendentes?')) return;
+  etiquetasPendentes = [];
+  salvarPendentes();
+  fecharPendentes();
+  mostrarToast('Pendentes removidas');
+}
+
+function copiarZPLDoPreview() {
+  let zpl = '';
+
+  // Veio do gerador
+  if (geradorBobinas.length > 0) {
+    zpl = geradorMontarZPL();
+  }
+  // Veio das pendentes
+  else if (!document.getElementById('modalPendentes').classList.contains('hidden') && etiquetasPendentes.length > 0) {
+    zpl = pendentesMontarZPL();
+  }
+  // Veio do menu exportar
+  else {
+    let bobinas = coletarBobinasParaQR(previewDados.dataInicio, previewDados.dataFim);
+    let lista = bobinas.map(bob => ({ qrData: bob.qrData, desc: bob.item + '/' + bob.versao + ' - ' + bob.peso }));
+    zpl = montarZPLDeLista(lista, previewDados.qrPorEtiqueta || 8);
+  }
+
+  if (!zpl) { mostrarToast('Nenhum ZPL para copiar', 'erro'); return; }
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(zpl).then(() => {
+      mostrarToast('ZPL copiado para a área de transferência');
+      if (navigator.vibrate) navigator.vibrate([50]);
+    }).catch(() => { geradorCopiarFallback(zpl); });
+  } else {
+    geradorCopiarFallback(zpl);
+  }
+}
+
+function geradorLimparEFechar() {
+  if (geradorBobinas.length > 0) {
+    if (!confirm('Descartar as etiquetas geradas?')) return;
+  }
+  geradorResetarTudo();
+  document.getElementById('modalGerador').classList.add('hidden');
+  mostrarToast('Etiquetas descartadas');
+}
+
+function geradorExportarDoPreview() { fecharPreviewEtiqueta(); geradorGerarZPL(); }
+
+/* ================= EXPOSIÇÃO GLOBAL ================= */
+
+window.fecharGerador = fecharGerador;
+window.abrirGerador = abrirGerador;
+window.abrirModalGerador = abrirGerador;
+window.geradorFiltrarTipo = geradorFiltrarTipo;
+window.geradorFiltrarItem = geradorFiltrarItem;
+window.geradorFiltrarBusca = geradorFiltrarBusca;
+window.geradorLimparBusca = geradorLimparBusca;
+window.geradorSelecionouVersao = geradorSelecionouVersao;
+window.geradorAdicionar = geradorAdicionar;
+window.geradorRepetirUltimo = geradorRepetirUltimo;
+window.geradorEditar = geradorEditar;
+window.geradorRemover = geradorRemover;
+window.geradorRemoverBobina = geradorRemoverBobina;
+window.geradorEditarBobina = geradorEditarBobina;
+window.geradorAddAoGrupo = geradorAddAoGrupo;
+window.geradorToggleCard = geradorToggleCard;
+window.geradorAvancar = geradorAvancar;
+window.geradorVoltar = geradorVoltar;
+window.geradorGerarZPL = geradorGerarZPL;
+window.geradorCopiarZPL = geradorCopiarZPL;
+window.geradorVisualizarZPL = geradorVisualizarZPL;
+window.geradorExportarDoPreview = geradorExportarDoPreview;
+window.geradorConcluir = geradorConcluir;
+window.geradorCancelar = geradorCancelar;
+window.geradorIrPassoClicavel = geradorIrPassoClicavel;
 window.abrirPreviewEtiqueta = abrirPreviewEtiqueta;
 window.fecharPreviewEtiqueta = fecharPreviewEtiqueta;
 window.previewPaginaAnterior = previewPaginaAnterior;
@@ -4919,7 +4529,37 @@ window.toggleExportPeriodo = toggleExportPeriodo;
 window.executarExportacaoNova = executarExportacaoNova;
 window.exportarZPLZebra = exportarZPLZebra;
 window.exportarQRCodesZIP = exportarQRCodesZIP;
-window.exportarCSVZebra = function() { exportarCSVZebraMult(null, null, 6); };
-window.ajustarFormatoExport = ajustarFormatoExport;
-window.exportarQRCodesEtiqueta = exportarQRCodesEtiqueta;
-window.gerarPDFEtiquetaCompacta = gerarPDFEtiquetaCompacta;
+window.exportarCSVZebra = function() { exportarCSVZebraMult(null, null, 8); };
+window.abrirPendentes = abrirPendentes;
+window.fecharPendentes = fecharPendentes;
+window.removerPendentePorIndex = removerPendentePorIndex;
+window.pendentesVisualizarZPL = pendentesVisualizarZPL;
+window.pendentesCopiarZPL = pendentesCopiarZPL;
+window.pendentesLimparTudo = pendentesLimparTudo;
+window.fecharResultadoQR = fecharResultadoQR;
+window.usarQRNaMovimentacao = usarQRNaMovimentacao;
+window.entradaRapidaQR = entradaRapidaQR;
+window.consumirBobinaQR = consumirBobinaQR;
+window.desmarcarConsumidaQR = desmarcarConsumidaQR;
+window.excluirBobinaQR = excluirBobinaQR;
+window.abrirScannerQR = abrirScannerQR;
+window.fecharScannerQR = fecharScannerQR;
+window.gerarQRBobina = gerarQRBobina;
+window.fecharModalQR = fecharModalQR;
+window.abrirAcoesHistorico = abrirAcoesHistorico;
+window.fecharModalHistoricoAcoes = fecharModalHistoricoAcoes;
+window.abrirQRDoHistorico = abrirQRDoHistorico;
+window.confirmarRemoverHistoricoSelecionado = confirmarRemoverHistoricoSelecionado;
+window.abrirScannerContinuo = abrirScannerContinuo;
+window.fecharScannerContinuo = fecharScannerContinuo;
+window.geradorFecharFinal = geradorFecharFinal;
+window.geradorFecharSimples = geradorFecharSimples;
+window.abrirModalConfig = abrirModalConfig;
+window.fecharModalConfig = fecharModalConfig;
+window.voltarConfigPrincipal = voltarConfigPrincipal;
+window.abrirConfigExportar = abrirConfigExportar;
+window.abrirConfigBackup = abrirConfigBackup;
+window.alternarModoEscuro = alternarModoEscuro;
+window.abrirConfigCadastro = abrirConfigCadastro;
+window.copiarZPLDoPreview = copiarZPLDoPreview;
+window.geradorLimparEFechar = geradorLimparEFechar;
