@@ -356,7 +356,7 @@ thead th.sortable.none .sort-arrow::after { content: ""; }
 
 .toast {
   position: fixed;
-  bottom: 20px;
+  top: 20px;
   left: 50%;
   transform: translateX(-50%);
   background: #1e293b;
@@ -373,13 +373,13 @@ thead th.sortable.none .sort-arrow::after { content: ""; }
 .toast.toast-erro    { background: #dc2626; }
 
 @keyframes toastEntrar {
-  from { opacity: 0; transform: translate(-50%, 16px); }
+  from { opacity: 0; transform: translate(-50%, -16px); }
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
 
 @keyframes toastSair {
   from { opacity: 1; transform: translate(-50%, 0); }
-  to   { opacity: 0; transform: translate(-50%, 16px); }
+  to   { opacity: 0; transform: translate(-50%, -16px); }
 }
 
 /* ================= BUSCA ================= */
