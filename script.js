@@ -2810,6 +2810,10 @@ function mostrarResultadoQR(dados, registro) {
   qrLidoAtual = { dados, registro };
   let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
   let itemExiste = tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)];
+let medida = "-";
+if (itemExiste) {
+  medida = banco[tipo][dados.item][String(dados.versao)].tamanho || "-";
+}
 
   let etiquetaData = "-";
   if (dados.id && dados.id.includes("/")) {
@@ -2859,10 +2863,11 @@ function mostrarResultadoQR(dados, registro) {
     statusTipo = "nova";
   }
 
-  document.getElementById("resultadoQRConteudo").innerHTML = `
+    document.getElementById("resultadoQRConteudo").innerHTML = `
     <div><strong>Tipo:</strong> ${tipo ? nomeCompletoTipo(tipo) : '<span style="color:#dc2626">Desconhecido</span>'}</div>
     <div><strong>Item:</strong> ${dados.item || '-'}</div>
     <div><strong>Versão:</strong> ${dados.versao || '-'}</div>
+    <div><strong>Medida:</strong> ${medida}</div>
     <div><strong>Peso:</strong> ${dados.peso || '-'} kg</div>
     <div><strong>Data de Produção:</strong> ${etiquetaData}</div>
     ${status}
@@ -4183,16 +4188,21 @@ function geradorRenderizarLista(containerId, comAcoes) {
     });
 
     card.innerHTML = `
-      <div class="gerador-card-header" onclick="geradorToggleCard(this)">
-        <div style="flex:1; min-width:0;">
-          <div>
-            <span class="gerador-card-tipo ${classTipo}">${nomeTipo}</span>
-            <span class="gerador-card-peso">${formatarPeso(pesoTotal)} kg</span>
-          </div>
-          <div class="gerador-card-detalhe">${grupo.item} / V${grupo.versao} · ${grupo.tamanho}</div>
+      <div class="gerador-card-header" onclick="geradorToggleCard(this)" style="display:flex; align-items:center; justify-content:space-between; gap:6px; padding:8px 10px;">
+        
+        <!-- LADO ESQUERDO: Fica tudo em uma linha e corta com '...' se não couber -->
+        <div style="display:flex; align-items:center; gap:6px; overflow:hidden; white-space:nowrap; flex:1;">
+          <span class="gerador-card-tipo ${classTipo}" style="margin:0; flex-shrink:0;">${nomeTipo}</span>
+          <span style="font-size:13px; font-weight:600; text-overflow:ellipsis; overflow:hidden;">${grupo.item} / V${grupo.versao} · ${grupo.tamanho}</span>
         </div>
-        <span class="gerador-card-qtd">×${qtdBobinas}</span>
-        <span class="gerador-card-seta">▶</span>
+
+        <!-- LADO DIREITO: Total, Qtd e Seta -->
+        <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+           <strong style="font-size:13px;">Total: ${formatarPeso(pesoTotal)} kg</strong>
+          <span class="gerador-card-qtd" style="margin:0;">${qtdBobinas} bob.</span>
+          <span class="gerador-card-seta" style="margin:0;">▶</span>
+        </div>
+
       </div>
       <div class="gerador-card-body">${bobinasHTML}</div>
     `;
@@ -4361,50 +4371,94 @@ function fecharPendentes() { document.getElementById('modalPendentes').classList
 function renderizarPendentes() {
   let container = document.getElementById('pendentesLista');
   let totalEl = document.getElementById('pendentesTotal');
+
+  if (!container) return;
+
   container.innerHTML = '';
-  if (totalEl) totalEl.textContent = etiquetasPendentes.length + ' pendente(s)';
-  if (etiquetasPendentes.length === 0) {
+
+  if (totalEl) {
+    totalEl.textContent = etiquetasPendentes.length + ' pendente(s)';
+  }
+
+  if (!Array.isArray(etiquetasPendentes) || etiquetasPendentes.length === 0) {
     container.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:13px; padding:12px;">Nenhuma etiqueta pendente</div>';
     return;
   }
+
   let grupos = {};
+
   etiquetasPendentes.forEach((p, idx) => {
-    let chave = p.tipo + '|' + p.item + '|' + p.versao;
-    if (!grupos[chave]) grupos[chave] = { tipo: p.tipo, item: p.item, versao: p.versao, tamanho: p.tamanho, pendentes: [] };
-    grupos[chave].pendentes.push({ ...p, indexReal: idx });
+    if (!p) return;
+
+    let chave = (p.tipo || '') + '|' + (p.item || '') + '|' + (p.versao || '');
+
+    if (!grupos[chave]) {
+      grupos[chave] = {
+        tipo: p.tipo || '',
+        item: p.item || '',
+        versao: p.versao || '',
+        tamanho: p.tamanho || '',
+        pendentes: []
+      };
+    }
+
+    grupos[chave].pendentes.push({
+      ...p,
+      indexReal: idx
+    });
   });
+
+  let html = '';
 
   Object.keys(grupos).forEach(chave => {
     let grupo = grupos[chave];
-    let pesoTotal = grupo.pendentes.reduce((acc, p) => acc + p.peso, 0);
+    let pesoTotal = grupo.pendentes.reduce((acc, p) => acc + (Number(p.peso) || 0), 0);
     let qtd = grupo.pendentes.length;
-    let card = document.createElement('div');
-    card.className = 'gerador-card';
+
     let bobinasHTML = '';
+
     grupo.pendentes.forEach((p, bIdx) => {
       bobinasHTML += `
         <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid #f1f5f9;">
-          <span style="font-size:12px;"><strong>Bobina ${bIdx + 1}:</strong> ${p.peso} kg <span style="font-size:10px; color:#94a3b8; margin-left:4px;">${p.dataCriacao}</span></span>
+          <span style="font-size:12px;">
+            <strong>Bobina ${bIdx + 1}:</strong> ${p.peso} kg
+            <span style="font-size:10px; color:#94a3b8; margin-left:4px;">${p.dataCriacao || ''}</span>
+          </span>
           <button class="btn-excluir-opcao" style="width:auto; padding:2px 8px; font-size:11px; height:26px; min-width:0;" onclick="event.stopPropagation(); removerPendentePorIndex(${p.indexReal})">🗑</button>
         </div>
       `;
     });
-    card.innerHTML = `
-      <div class="gerador-card-header" onclick="geradorToggleCard(this)">
-        <span class="gerador-card-resumo">${grupo.item} / V${grupo.versao} — ${formatarPeso(pesoTotal)}kg</span>
-        <span class="gerador-card-qtd">Bobinas: ${qtd}</span>
-        <span class="gerador-card-seta">▶</span>
-      </div>
-      <div class="gerador-card-body">
-        <div><strong>Tipo:</strong> ${nomeCompletoTipo(grupo.tipo)}</div>
-        <div><strong>Item:</strong> ${grupo.item}</div>
-        <div><strong>Versão:</strong> ${grupo.versao} (${grupo.tamanho})</div>
-        <div style="margin-top:6px; font-weight:600; font-size:12px; color:#1e3a8a;">Bobinas:</div>
-        ${bobinasHTML}
+
+    html += `
+      <div class="gerador-card">
+        <div class="gerador-card-header" onclick="geradorToggleCard(this)">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; width:100%;">
+            <div style="display:flex; align-items:center; gap:6px; overflow:hidden; white-space:nowrap; flex:1;">
+              <span class="gerador-card-tipo tipo-${grupo.tipo}">${nomeBonitoTipo(grupo.tipo)}</span>
+              <span style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis;">
+                ${grupo.item} / V${grupo.versao} · ${grupo.tamanho}
+              </span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+              <strong style="font-size:13px;">Total: ${formatarPeso(pesoTotal)} kg</strong>
+              <span class="gerador-card-qtd">${qtd} bob.</span>
+              <span class="gerador-card-seta">▶</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="gerador-card-body">
+          <div><strong>Tipo:</strong> ${nomeCompletoTipo(grupo.tipo)}</div>
+          <div><strong>Item:</strong> ${grupo.item}</div>
+          <div><strong>Versão:</strong> ${grupo.versao} (${grupo.tamanho})</div>
+          <div style="margin-top:6px; font-weight:600; font-size:12px; color:#1e3a8a;">Bobinas:</div>
+          ${bobinasHTML}
+        </div>
       </div>
     `;
-    container.appendChild(card);
   });
+
+  container.innerHTML = html;
 }
 
 function pendentesMontarZPL() {
