@@ -1,3 +1,98 @@
+
+let collectorFocusTimer = null;
+let collectorReadTimer = null;
+let coletorBuffer = '';
+let coletorInterval = null;
+
+function iniciarMonitoramentoColetor() {
+  const input = document.getElementById("collectorInput");
+  if (!input) return;
+
+  input.value = "";
+  
+  // Em vez de clonar (que causa teclado abrir), usa uma flag
+  // para evitar listeners duplicados
+  if (input._coletorInicializado) return;
+  input._coletorInicializado = true;
+  
+  // Foco automático sem abrir teclado (readonly trick)
+  if (collectorFocusTimer) clearInterval(collectorFocusTimer);
+  collectorFocusTimer = setInterval(() => {
+    let modal = document.getElementById('modalScannerConf');
+    if (!modal || modal.classList.contains('hidden') || !conferencia.coletorMode) return;
+    if (document.activeElement !== input) {
+      input.readOnly = true;
+      input.focus({ preventScroll: true });
+      // Força fechamento do teclado
+      input.blur();
+      input.focus({ preventScroll: true });
+      setTimeout(() => { input.readOnly = false; }, 50);
+    }
+  }, 600);
+
+  // Handler único: Enter processa imediatamente
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (collectorReadTimer) clearTimeout(collectorReadTimer);
+      processarLeituraColetorInput(input);
+    }
+  });
+
+  // Input com timeout para QRs que não terminam com Enter
+  input.addEventListener('input', function() {
+    if (collectorReadTimer) clearTimeout(collectorReadTimer);
+    collectorReadTimer = setTimeout(() => {
+      processarLeituraColetorInput(input);
+    }, 300);
+  });
+}
+
+async function processarLeituraColetorInput(inputEl) {
+  const input = inputEl || document.getElementById("collectorInput");
+  if (!input) return;
+  let val = input.value.trim();
+  input.value = "";
+  if (!val) return;
+  let codigo = val.replace(/[\r\n\t]+/g, "").trim();
+  if (codigo.length >= 2) {
+    let resultado = await confProcessarLeitura(codigo);
+    confLogScanner(resultado, codigo);
+    
+    if (conferencia.coletorMode) {
+      let statusEl = document.getElementById('confScannerStatus');
+      if (statusEl) statusEl.textContent = conferencia.conferidas.length + ' conferida(s)';
+      confRenderizarLista();
+    }
+    
+    // Restaura foco SEM abrir teclado
+    if (conferencia.coletorMode) {
+      // truque: readonly focus + blur + focus
+      input.readOnly = true;
+      input.focus({ preventScroll: true });
+      input.blur();
+      input.focus({ preventScroll: true });
+      setTimeout(() => { input.readOnly = false; }, 50);
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /* ================= TOAST ================= */
 
 function mostrarToast(texto = 'Concluído', tipo = 'sucesso'){
@@ -20,6 +115,7 @@ function formatarPeso(valor) {
 function nomeBonitoTipo(tipo){
   if(tipo === "brf") return "BRF";
   if(tipo === "tampas") return "Tampa";
+  if(tipo === "fundo") return "Fundo";
   if(tipo === "laminacao") return "1ª Lam.";
   return tipo;
 }
@@ -27,6 +123,7 @@ function nomeBonitoTipo(tipo){
 function nomeCompletoTipo(tipo){
   if(tipo === "brf") return "BRF";
   if(tipo === "tampas") return "Tampas";
+  if(tipo === "fundo") return "Fundo";
   if(tipo === "laminacao") return "1ª Laminação";
   return tipo;
 }
@@ -125,6 +222,8 @@ const saldoAtual = document.getElementById("saldoAtual");
 const totalGeralLabel = document.getElementById("totalGeral");
 const totalBrfLabel = document.getElementById("totalBrf");
 const totalTampasLabel = document.getElementById("totalTampas");
+const totalFundoLabel = document.getElementById("totalFundo");
+const barraFundo = document.getElementById("barraFundo");
 const totalLaminacaoLabel = document.getElementById("totalLaminacao");
 const barraBrf = document.getElementById("barraBrf");
 const barraTampas = document.getElementById("barraTampas");
@@ -171,6 +270,7 @@ const bancoPadrao = {
       "2":  { tamanho: "64.5 x 78" },
       "10": { tamanho: "105 x 58" },
       "4":  { tamanho: "93 x 78" },
+      "5":  { tamanho: "95 x 78" },
       "7":  { tamanho: "91.5 x 58" },
       "9":  { tamanho: "87 x 58" },
       "6":  { tamanho: "94 x 58" }
@@ -179,6 +279,7 @@ const bancoPadrao = {
     "1500768": { "6": { tamanho: "91.5 x 58" } },
     "1500483": { "3": { tamanho: "101 x 58" } }
   },
+fundo: {},
   laminacao: {
     "175813-4":  { "01":  { tamanho: "87.5 x 78" } },
     "168383-4":  { "02":  { tamanho: "58.5 x 76" } },
@@ -195,33 +296,29 @@ let historico = [];
 let etiquetasPendentes = [];
 
 function carregarDados() {
+  let estoqueLocal = localStorage.getItem('estoque');
+  let historicoLocal = localStorage.getItem('historico');
+  if (estoqueLocal) estoque = JSON.parse(estoqueLocal);
+  if (historicoLocal) historico = JSON.parse(historicoLocal);
   carregarBanco();
-  estoque = JSON.parse(localStorage.getItem("estoque")) || {};
-  historico = JSON.parse(localStorage.getItem("historico")) || [];
+  carregarPendentes();
 
-  historico.forEach(h => {
-    if (h.tipo === "Entrada" && (!h.id || typeof h.id === 'number')) {
-      h.id = crypto.randomUUID();
-    }
-  });
-
-  if (localStorage.getItem('modoEscuro') === 'true') {
+  let modoEscuro = localStorage.getItem('modoEscuro');
+  if (modoEscuro === 'true') {
     document.body.classList.add('dark-mode');
     let toggle = document.getElementById('darkModeToggle');
     if (toggle) toggle.checked = true;
     let icone = document.getElementById('darkModeIcon');
     if (icone) icone.textContent = '☀️';
   }
-
-  carregarPendentes();
-  salvarDados();
-  atualizarTabela();
-  atualizarHistorico();
 }
+
 
 function salvarDados() {
   localStorage.setItem("estoque", JSON.stringify(estoque));
   localStorage.setItem("historico", JSON.stringify(historico));
+  // ❌ Removido: sincronização automática com Firebase
+  // Agora é manual via botão "Sincronizar"
 }
 
 /* ================= BANCO NO LOCALSTORAGE ================= */
@@ -449,7 +546,6 @@ function movimentar(tipoMov){
 
   if(tipoMov === 'remove'){
     if(!estoque[identificador] || estoque[identificador] <= 0){ mostrarToast("Sem saldo disponível", 'erro'); return; }
-    if(qtd > estoque[identificador]){ mostrarToast("Peso maior que o saldo disponível", 'erro'); return; }
     abrirModalSaida(identificador, qtd);
     return;
   } else {
@@ -492,7 +588,7 @@ function ordenarEstoque(coluna) {
     if (filtroTipoEstoque > 3) filtroTipoEstoque = 0;
     let thTipo = document.querySelector('#estoque thead th[onclick="ordenarEstoque(\'tipo\')"]');
     if (thTipo) {
-      let letras = ['', 'B', 'T', '1ª'];
+      let letras = ['', 'B', 'T', 'F', '1ª'];;
       thTipo.innerHTML = 'Tipo<span class="sort-arrow">' + (letras[filtroTipoEstoque] ? ' (' + letras[filtroTipoEstoque] + ')' : '') + '</span>';
     }
     atualizarTabela();
@@ -515,7 +611,7 @@ function atualizarTabela(){
   const tabela = document.getElementById('tabela');
   tabela.innerHTML='';
   let termo = document.getElementById('buscaEstoque').value.toLowerCase();
-  let pesoTotal = 0, totalBrf = 0, totalTampas = 0, totalLaminacao = 0;
+  let pesoTotal = 0, totalBrf = 0, totalTampas = 0, totalLaminacao = 0, totalFundo = 0;
 
   let dados = Object.keys(estoque)
     .filter(i => !i.endsWith('_qtd'))
@@ -543,6 +639,7 @@ function atualizarTabela(){
       pesoTotal += peso;
       if (tipoEncontrado === "brf") totalBrf += peso;
       if (tipoEncontrado === "tampas") totalTampas += peso;
+      if (tipoEncontrado === "fundo") totalFundo += peso;
       if (tipoEncontrado === "laminacao") totalLaminacao += peso;
       return { identificador: i, tipo: tipoEncontrado, item, versao, tamanho, peso, qtdEntradas: quantidadeEntradas };
     })
@@ -550,13 +647,13 @@ function atualizarTabela(){
     .filter(d => `${d.tipo} ${d.item} ${d.versao} ${d.tamanho} ${d.peso}`.toLowerCase().includes(termo));
 
   if (filtroTipoEstoque > 0) {
-    let prioridades = [null, 'brf', 'tampas', 'laminacao'];
+    let prioridades = [null, 'brf', 'tampas', 'fundo', 'laminacao'];
     let tipoPrioritario = prioridades[filtroTipoEstoque];
     dados.sort((a, b) => {
       let aPri = (a.tipo === tipoPrioritario) ? 0 : 1;
       let bPri = (b.tipo === tipoPrioritario) ? 0 : 1;
       if (aPri !== bPri) return aPri - bPri;
-      let ordem = { 'brf': 1, 'tampas': 2, 'laminacao': 3 };
+      let ordem = { 'brf': 1, 'tampas': 2, 'fundo': 3, 'laminacao': 4 };
       return (ordem[a.tipo] || 4) - (ordem[b.tipo] || 4);
     });
   }
@@ -585,10 +682,12 @@ function atualizarTabela(){
   if(totalBobinasLabel) totalBobinasLabel.textContent = totalBobinasCount + " bobinas";
   if(totalBrfLabel) totalBrfLabel.innerHTML = formatarPeso(totalBrf) + " kg";
   if(totalTampasLabel) totalTampasLabel.innerHTML = formatarPeso(totalTampas) + " kg";
+  if(totalFundoLabel) totalFundoLabel.innerHTML = formatarPeso(totalFundo) + " kg";
   if(totalLaminacaoLabel) totalLaminacaoLabel.innerHTML = formatarPeso(totalLaminacao) + " kg";
 
   let percBrf = pesoTotal ? (totalBrf/pesoTotal)*100 : 0;
   let percTampas = pesoTotal ? (totalTampas/pesoTotal)*100 : 0;
+  let percFundo = pesoTotal ? (totalFundo/pesoTotal)*100 : 0;
   let percLaminacao = pesoTotal ? (totalLaminacao/pesoTotal)*100 : 0;
 
   function atualizarBarra(barra, percentual) {
@@ -599,6 +698,7 @@ function atualizarTabela(){
 
   if (barraBrf) atualizarBarra(barraBrf, percBrf);
   if (barraTampas) atualizarBarra(barraTampas, percTampas);
+  if (barraFundo) atualizarBarra(barraFundo, percFundo);
   if (barraLaminacao) atualizarBarra(barraLaminacao, percLaminacao);
 
   let html = '';
@@ -655,10 +755,11 @@ function remover(item){
 function ordenarHistorico(coluna) {
   if (coluna === 'tipo') {
     filtroTipoHistorico++;
-    if (filtroTipoHistorico > 3) filtroTipoHistorico = 0;
+    if (filtroTipoHistorico > 4) filtroTipoHistorico = 0;  // ← era 3, agora 4
+
     let thTipo = document.querySelector('#historico thead th[onclick="ordenarHistorico(\'tipo\')"]');
     if (thTipo) {
-      let letras = ['', 'B', 'T', '1ª'];
+      let letras = ['', 'B', 'T', 'F', '1ª'];  // ← ADICIONADO 'F'
       thTipo.innerHTML = 'Tipo<span class="sort-arrow">' + (letras[filtroTipoHistorico] ? ' (' + letras[filtroTipoHistorico] + ')' : '') + '</span>';
     }
     atualizarHistorico();
@@ -737,15 +838,15 @@ function atualizarHistorico(){
 
   dados.reverse();
 
-  if (filtroTipoHistorico > 0) {
-    let prioridades = [null, 'brf', 'tampas', 'laminacao'];
+    if (filtroTipoHistorico > 0) {
+    let prioridades = [null, 'brf', 'tampas', 'fundo', 'laminacao'];  // ← ADICIONADO 'fundo'
     let tipoPrioritario = prioridades[filtroTipoHistorico];
     dados.sort((a, b) => {
       let aPri = (a.tipo === tipoPrioritario) ? 0 : 1;
       let bPri = (b.tipo === tipoPrioritario) ? 0 : 1;
       if (aPri !== bPri) return aPri - bPri;
-      let ordem = { 'brf': 1, 'tampas': 2, 'laminacao': 3 };
-      return (ordem[a.tipo] || 4) - (ordem[b.tipo] || 4);
+      let ordem = { 'brf': 1, 'tampas': 2, 'fundo': 3, 'laminacao': 4 };  // ← ADICIONADO
+      return (ordem[a.tipo] || 5) - (ordem[b.tipo] || 5);
     });
   }
 
@@ -899,7 +1000,7 @@ function exportarEstoque(dataInicioP, dataFimP) {
 
   if (dadosEstoque.length === 0) { mostrarToast("Estoque vazio", "erro"); return; }
 
-  let ordemTipo = { 'BRF': 1, 'Tampa': 2, '1ª Lam.': 3 };
+  let ordemTipo = { 'BRF': 1, 'Tampa': 2, 'Fundo': 3, '1ª Lam.': 4 };
   dadosEstoque.sort((a, b) => (ordemTipo[a.Tipo] || 99) - (ordemTipo[b.Tipo] || 99));
 
   let linhas = [];
@@ -912,7 +1013,7 @@ function exportarEstoque(dataInicioP, dataFimP) {
   linhas.push(['RESUMO POR TIPO', '', '', '', '', '']);
   linhas.push(['Tipo', '', '', '', 'Kg', 'Bobinas']);
 
-  ['BRF', 'Tampas', '1ª Laminação'].forEach(nomeT => {
+  ['BRF', 'Tampas', 'Fundo', '1ª Laminação'].forEach(nomeT => {
     if (totaisPorTipo[nomeT]) {
       let perc = totalGeral > 0 ? Math.round((totaisPorTipo[nomeT].kg / totalGeral) * 100) : 0;
       linhas.push([nomeT, '', '', perc + '%', formatarPeso(totaisPorTipo[nomeT].kg) + ' kg', totaisPorTipo[nomeT].bobinas + ' bobinas']);
@@ -1015,7 +1116,7 @@ function exportarAmbos(dataInicioP, dataFimP) {
     dadosEstoque.push({ Tipo: nomeBonitoTipo(tipoInterno), Item: item, Versão: versao, Medidas: tamanho, Kg: peso, Bobinas: qtdBobinas });
   });
 
-  let ordemTipo = { 'BRF': 1, 'Tampa': 2, '1ª Lam.': 3 };
+  let ordemTipo = { 'BRF': 1, 'Tampa': 2, 'Fundo': 3, '1ª Lam.': 4 };
   dadosEstoque.sort((a, b) => (ordemTipo[a.Tipo] || 99) - (ordemTipo[b.Tipo] || 99));
 
   let linhasEstoque = [];
@@ -1028,7 +1129,7 @@ function exportarAmbos(dataInicioP, dataFimP) {
   linhasEstoque.push(['RESUMO POR TIPO', '', '', '', '', '']);
   linhasEstoque.push(['Tipo', '', '', '', 'Kg', 'Bobinas']);
 
-  ['BRF', 'Tampas', '1ª Laminação'].forEach(nomeT => {
+  ['BRF', 'Tampas', 'Fundo', '1ª Laminação'].forEach(nomeT => {
     if (totaisPorTipo[nomeT]) {
       let perc = totalGeral > 0 ? Math.round((totaisPorTipo[nomeT].kg / totalGeral) * 100) : 0;
       linhasEstoque.push([nomeT, '', '', perc + '%', formatarPeso(totaisPorTipo[nomeT].kg) + ' kg', totaisPorTipo[nomeT].bobinas + ' bobinas']);
@@ -1136,7 +1237,7 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
 
   if (dadosEstoque.length === 0) { mostrarToast('Estoque vazio', 'erro'); return; }
 
-  let ordemTipo = { 'BRF': 1, 'Tampa': 2, '1ª Lam.': 3 };
+  let ordemTipo = { 'BRF': 1, 'Tampa': 2, 'Fundo':3, '1ª Lam.': 4 };
   dadosEstoque.sort((a, b) => (ordemTipo[a[0]] || 99) - (ordemTipo[b[0]] || 99));
 
   doc.setFillColor(30, 58, 138);
@@ -1159,7 +1260,7 @@ function exportarEstoquePDF(dataInicioP, dataFimP) {
 
   resumoY += 5;
   let tiposTexto = [];
-  ['BRF', 'Tampas', '1ª Laminação'].forEach(nomeT => {
+  ['BRF', 'Tampas', 'Fundo', '1ª Laminação'].forEach(nomeT => {
     if (totaisPorTipo[nomeT]) {
       let perc = totalGeral > 0 ? Math.round((totaisPorTipo[nomeT].kg / totalGeral) * 100) : 0;
       tiposTexto.push(nomeT + ': ' + formatarPeso(totaisPorTipo[nomeT].kg) + ' kg · ' + totaisPorTipo[nomeT].bobinas + ' bob. (' + perc + '%)');
@@ -1357,36 +1458,24 @@ function fecharDetalhes() {
 
 function irParaBobinaNosDetalhes(registro, indexHistorico) {
   if (!registro || !registro.item) return;
-
   let itemApenas = registro.item.split(" - ")[0].trim();
   let tipo = descobrirTipoPorItem(itemApenas);
-
-  if (!tipo) {
-    mostrarToast('Tipo não encontrado', 'erro');
-    return;
-  }
-
+  if (!tipo) { mostrarToast('Tipo não encontrado', 'erro'); return; }
   abrirDetalhes(tipo);
-
   let campoBusca = document.getElementById('buscaDetalhes');
   if (campoBusca) campoBusca.value = "";
   atualizarDetalhes();
-
   setTimeout(() => {
     let partes = registro.item.split(" - V");
     let idGrupo = "gp" + partes[0].replace(/[^a-zA-Z0-9]/g, '') + partes[1].replace(/[^a-zA-Z0-9]/g, '');
     abrirGrupoDetalhePorId(idGrupo);
-
     let digitalData = registro.data.replace(/[^0-9]/g, "");
     let linha = document.getElementById("BOBINA-" + indexHistorico + "-" + digitalData);
     if (linha) {
       linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
       linha.style.backgroundColor = '#fef3c7';
       linha.style.outline = '3px solid #1e3a8a';
-      setTimeout(() => {
-        linha.style.backgroundColor = '';
-        linha.style.outline = '';
-      }, 5000);
+      setTimeout(() => { linha.style.backgroundColor = ''; linha.style.outline = ''; }, 5000);
     } else {
       mostrarToast("Bobina localizada, mas o filtro a escondeu", "erro");
     }
@@ -1410,18 +1499,18 @@ function atualizarDetalhes() {
   let pesoTotalAcumulado = 0, totalBobinas = 0;
 
   let entradas = historico.filter(h => {
-    if (h.tipo !== "Entrada") return false;
-    if (h._removidaEstoque) return false;
-    let partes = h.item.split(" - V");
-    if (partes.length < 2) return false;
-    let item = partes[0];
-    let tipoEncontrado = "";
-    Object.keys(banco).forEach(t => { if (banco[t][item]) tipoEncontrado = t; });
-    if (tipoEncontrado !== tipoDetalheAtual) return false;
-    if (h.consumida) return true;
-    if (!estoque[h.item] || estoque[h.item] <= 0) return false;
-    return true;
-  });
+  if (h.tipo !== "Entrada") return false;
+  if (h._removidaEstoque) return false;
+  if (h.consumida) return false;           // ← Agora exclui as consumidas
+  let partes = h.item.split(" - V");
+  if (partes.length < 2) return false;
+  let item = partes[0];
+  let tipoEncontrado = "";
+  Object.keys(banco).forEach(t => { if (banco[t][item]) tipoEncontrado = t; });
+  if (tipoEncontrado !== tipoDetalheAtual) return false;
+  if (!estoque[h.item] || estoque[h.item] <= 0) return false;
+  return true;
+});
 
   let agrupado = {};
   let todasEntradas = {};
@@ -1433,17 +1522,17 @@ function atualizarDetalhes() {
   Object.keys(todasEntradas).forEach(chave => {
     let pesoAtual = estoque[chave] || 0;
     let lista = todasEntradas[chave];
-    let consumidas = lista.filter(h => h.consumida);
-    let ativas = lista.filter(h => !h.consumida);
-    if (pesoAtual <= 0 && consumidas.length === 0) return;
-    let registrosSelecionados = [];
-    let soma = 0;
-    for (let i = ativas.length - 1; i >= 0; i--) {
-      if (soma >= pesoAtual) break;
-      registrosSelecionados.unshift(ativas[i]);
-      soma += ativas[i].qtd;
-    }
-    agrupado[chave] = { registros: [...consumidas, ...registrosSelecionados], total: pesoAtual };
+    if (pesoAtual <= 0) return;
+
+let registrosSelecionados = [];
+let soma = 0;
+for (let i = lista.length - 1; i >= 0; i--) {
+  if (soma >= pesoAtual) break;
+  registrosSelecionados.unshift(lista[i]);
+  soma += lista[i].qtd;
+}
+
+agrupado[chave] = { registros: registrosSelecionados, total: pesoAtual };
   });
 
   Object.keys(estoque).filter(chave => !chave.endsWith('_qtd')).forEach(chave => {
@@ -1503,7 +1592,7 @@ function atualizarDetalhes() {
       tamanho = banco[tipoDetalheAtual][item][versao].tamanho;
     }
     pesoTotalAcumulado += agrupado[chave].total;
-    totalBobinas += agrupado[chave].registros.length;
+     totalBobinas += agrupado[chave].registros.filter(r => !r.consumida).length; 
     let idLimpo = "gp" + item.replace(/[^a-zA-Z0-9]/g, '') + versao.replace(/[^a-zA-Z0-9]/g, '');
 
     let tr = document.createElement('tr');
@@ -1908,359 +1997,6 @@ function atualizarTudo() {
   }
 }
 
-/* ================= SAÍDA COM SELEÇÃO DE BOBINAS ================= */
-
-let saidaAtual = { identificador: null, pesoTotal: 0, pesoRestante: 0, bobinas: [], descontos: {}, zeradas: [] };
-let bobinaZeradaAtual = null;
-
-function abrirModalSaida(identificador, pesoSaida) {
-  saidaAtual.identificador = identificador;
-  saidaAtual.pesoTotal = pesoSaida;
-  saidaAtual.pesoRestante = pesoSaida;
-  saidaAtual.descontos = {};
-  saidaAtual.zeradas = [];
-  let entradas = historico.filter(h => h.item === identificador && h.tipo === "Entrada" && !h.consumida);
-  let pesoAtual = estoque[identificador] || 0;
-  let bobinas = [], soma = 0;
-  for (let i = entradas.length - 1; i >= 0; i--) {
-    if (soma >= pesoAtual) break;
-    bobinas.unshift(entradas[i]);
-    soma += entradas[i].qtd;
-  }
-  saidaAtual.bobinas = bobinas;
-  document.getElementById('modalSaidaTitulo').textContent = 'Saída — ' + identificador;
-  renderizarBobinasSaida();
-  document.getElementById('modalSaida').classList.remove('hidden');
-}
-
-function renderizarBobinasSaida() {
-  let tbody = document.getElementById('modalSaidaBody');
-  let html = '';
-  saidaAtual.bobinas.forEach((bob, idx) => {
-    let indexReal = historico.indexOf(bob);
-    let desconto = saidaAtual.descontos[indexReal] || 0;
-    let pesoAtualBob = bob.qtd - desconto;
-    let jaSelecionada = desconto > 0;
-    let zerada = saidaAtual.zeradas.includes(indexReal);
-    let classe = zerada ? 'bobina-descontada' : (jaSelecionada ? 'bobina-selecionada' : '');
-    let checado = jaSelecionada ? 'checked' : '';
-    let desabilitado = (saidaAtual.pesoRestante <= 0 && !jaSelecionada) ? 'disabled' : '';
-    html += `
-      <tr class="${classe}">
-        <td><input type="radio" ${checado} ${desabilitado} onclick="selecionarBobinaSaida(${indexReal})" style="width:16px;height:16px;margin:0;cursor:pointer;"></td>
-        <td><strong>${idx+1}</strong></td>
-        <td style="font-size:11px;">${bob.data}</td>
-        <td><strong>${Math.round(pesoAtualBob)}</strong></td>
-      </tr>
-    `;
-  });
-  tbody.innerHTML = html;
-  document.getElementById('modalSaidaRestante').textContent = 'Restante: ' + Math.round(saidaAtual.pesoRestante) + ' kg';
-}
-
-function selecionarBobinaSaida(indexReal) {
-  let bob = historico[indexReal];
-  if (!bob) return;
-  if (saidaAtual.descontos[indexReal]) {
-    saidaAtual.pesoRestante += saidaAtual.descontos[indexReal];
-    delete saidaAtual.descontos[indexReal];
-    let pos = saidaAtual.zeradas.indexOf(indexReal);
-    if (pos !== -1) saidaAtual.zeradas.splice(pos, 1);
-    renderizarBobinasSaida();
-    return;
-  }
-  let pesoAtualBob = bob.qtd;
-  if (saidaAtual.pesoRestante <= 0) return;
-  if (saidaAtual.pesoRestante >= pesoAtualBob) {
-    saidaAtual.descontos[indexReal] = pesoAtualBob;
-    saidaAtual.pesoRestante -= pesoAtualBob;
-    saidaAtual.zeradas.push(indexReal);
-  } else {
-    saidaAtual.descontos[indexReal] = saidaAtual.pesoRestante;
-    saidaAtual.pesoRestante = 0;
-  }
-  renderizarBobinasSaida();
-}
-
-function confirmarSaida() {
-  let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a+b, 0);
-  if (totalDescontado <= 0) { mostrarToast('Selecione pelo menos uma bobina', 'erro'); return; }
-  if (saidaAtual.pesoRestante > 0) { mostrarToast('Ainda restam ' + Math.round(saidaAtual.pesoRestante) + ' kg para descontar', 'erro'); return; }
-  if (saidaAtual.zeradas.length > 0) processarZeradas(0);
-  else finalizarSaida();
-}
-
-function processarZeradas(indice) {
-  if (indice >= saidaAtual.zeradas.length) { finalizarSaida(); return; }
-  bobinaZeradaAtual = { indexReal: saidaAtual.zeradas[indice], indiceZerada: indice };
-  let bob = historico[bobinaZeradaAtual.indexReal];
-  document.getElementById('modalZerouTexto').textContent = 'Bobina #' + (saidaAtual.bobinas.indexOf(bob)+1) + ' — ' + Math.round(bob.qtd) + ' kg';
-  document.getElementById('modalZerou').classList.remove('hidden');
-}
-
-function zerouConsumir() {
-  historico[bobinaZeradaAtual.indexReal]._consumir = true;
-  document.getElementById('modalZerou').classList.add('hidden');
-  processarZeradas(bobinaZeradaAtual.indiceZerada + 1);
-}
-
-function zerouExcluir() {
-  historico[bobinaZeradaAtual.indexReal]._excluir = true;
-  document.getElementById('modalZerou').classList.add('hidden');
-  processarZeradas(bobinaZeradaAtual.indiceZerada + 1);
-}
-
-function finalizarSaida() {
-  salvarEstadoParaDesfazer();
-  let totalDescontado = Object.values(saidaAtual.descontos).reduce((a, b) => a+b, 0);
-  let bobsConsumidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._consumir);
-  let bobsExcluidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._excluir);
-  let pesoDescontadoParcial = 0;
-  Object.keys(saidaAtual.descontos).forEach(idx => {
-    let indexReal = parseInt(idx);
-    if (!saidaAtual.zeradas.includes(indexReal)) pesoDescontadoParcial += saidaAtual.descontos[indexReal];
-  });
-  let partesMsg = saidaAtual.identificador.split(" - V");
-  let itemNome = partesMsg[0], versaoNome = partesMsg[1];
-  let mensagemFinal = "";
-  bobsConsumidas.forEach(idx => { let bob = historico[idx]; if (bob) mensagemFinal += "Bobina consumida (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n"; });
-  bobsExcluidas.forEach(idx => { let bob = historico[idx]; if (bob) mensagemFinal += "Bobina excluída (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n"; });
-  if (pesoDescontadoParcial > 0) mensagemFinal += "Removido " + Math.round(pesoDescontadoParcial) + "kg (" + itemNome + ", V" + versaoNome + ")";
-  if (estoque[saidaAtual.identificador]) {
-    estoque[saidaAtual.identificador] -= totalDescontado;
-    let qtdKey = saidaAtual.identificador + '_qtd';
-    if (saidaAtual.zeradas.length > 0 && estoque[qtdKey]) {
-      estoque[qtdKey] -= saidaAtual.zeradas.length;
-      if (estoque[qtdKey] < 0) estoque[qtdKey] = 0;
-    }
-    if (estoque[saidaAtual.identificador] <= 0) {
-      delete estoque[saidaAtual.identificador];
-      delete estoque[qtdKey];
-    }
-  }
-  Object.keys(saidaAtual.descontos).forEach(idx => {
-    let indexReal = parseInt(idx);
-    if (!saidaAtual.zeradas.includes(indexReal)) historico[indexReal].qtd -= saidaAtual.descontos[indexReal];
-  });
-  bobsConsumidas.forEach(idx => {
-    let bob = historico[idx];
-    if (bob) {
-      bob.consumida = true;
-      historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Consumo', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
-      delete bob._consumir;
-    }
-  });
-  if (pesoDescontadoParcial > 0) {
-    let pesoOriginalParcial = 0, refEntradaId = null, refEntradaData = null;
-    Object.keys(saidaAtual.descontos).forEach(idx => {
-      let indexReal = parseInt(idx);
-      if (!saidaAtual.zeradas.includes(indexReal)) {
-        pesoOriginalParcial = historico[indexReal].qtd + saidaAtual.descontos[indexReal];
-        refEntradaId = historico[indexReal].id || null;
-        refEntradaData = historico[indexReal].data || null;
-      }
-    });
-    historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Consumo parcial', item: saidaAtual.identificador, qtd: pesoDescontadoParcial, qtdOriginal: pesoOriginalParcial, refEntradaId, refEntradaData });
-  }
-  bobsExcluidas.forEach(idx => {
-    let bob = historico[idx];
-    if (bob) {
-      bob._removidaEstoque = true;
-      historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
-      delete bob._excluir;
-    }
-  });
-  for (let i = historico.length - 1; i >= 0; i--) {
-    if (!historico[i]) continue;
-    if (historico[i]._excluir) { historico.splice(i, 1); continue; }
-    if (historico[i]._consumir) delete historico[i]._consumir;
-  }
-  salvarDados();
-  atualizarTabela();
-  atualizarHistorico();
-  document.getElementById('modalSaida').classList.add('hidden');
-  tipoSelect.value = '';
-  itemSelect.innerHTML = '<option value="">Selecionar item</option>';
-  versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
-  quantidade.value = '';
-  document.getElementById('buscaItem').value = '';
-  if(saldoAtual) saldoAtual.innerHTML = "";
-  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-  mostrarToast('Saída aplicada');
-  setTimeout(function() { if (mensagemFinal) alert(mensagemFinal); }, 150);
-}
-
-function cancelarSaida() {
-  saidaAtual = { identificador: null, pesoTotal: 0, pesoRestante: 0, bobinas: [], descontos: {}, zeradas: [] };
-  document.getElementById('modalSaida').classList.add('hidden');
-}
-
-/* ================= LONG PRESS LIMPAR TUDO ================= */
-
-document.addEventListener("DOMContentLoaded", function() {
-  configurarLongPress(document.getElementById('btnLimparEstoque'), function() {
-    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o estoque?\n\nAs exclusões serão registradas no histórico.")) return;
-    salvarEstadoParaDesfazer();
-    let alterou = excluirTodoEstoqueComHistorico();
-    salvarDados();
-    atualizarTabela();
-    atualizarHistorico();
-    if (tipoDetalheAtual) atualizarDetalhes();
-    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    if (alterou) mostrarToast('Estoque excluído');
-    else mostrarToast('Nenhum item no estoque', 'erro');
-  });
-
-  configurarLongPress(document.getElementById('btnLimparHistorico'), function() {
-    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja limpar o histórico?\n\nRegistros de bobinas que ainda estão no estoque serão mantidos.")) return;
-    historico = historico.filter(h => h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque && estoque[h.item] > 0);
-    salvarDados();
-    atualizarHistorico();
-    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    mostrarToast('Histórico limpo');
-  });
-
-  configurarLongPress(document.getElementById('btnLimparDetalhes'), function() {
-    if (!tipoDetalheAtual) return;
-    let nomeTipo = nomeCompletoTipo(tipoDetalheAtual);
-    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir todo o estoque de " + nomeTipo + "?\n\nAs exclusões serão registradas no histórico.")) return;
-    salvarEstadoParaDesfazer();
-    let alterou = excluirEstoquePorTipoComHistorico(tipoDetalheAtual);
-    salvarDados();
-    atualizarTabela();
-    atualizarHistorico();
-    atualizarDetalhes();
-    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    if (alterou) mostrarToast(nomeTipo + ' excluído');
-    else mostrarToast('Nenhum item de ' + nomeTipo, 'erro');
-  });
-
-  let btnLimparFiltro = document.getElementById("btnLimparFiltro");
-  if (btnLimparFiltro) {
-    btnLimparFiltro.addEventListener("click", function() {
-      document.getElementById("dataInicio").value = "";
-      document.getElementById("dataFim").value = "";
-      document.getElementById("buscaHistorico").value = "";
-      atualizarHistorico();
-    });
-  }
-
-  let modalGer = document.getElementById('modalGerador');
-  if (modalGer) {
-    modalGer.addEventListener('click', function(e) {
-      if (e.target === this) geradorFecharSimples();
-    });
-  }
-
-  let modalPend = document.getElementById('modalPendentes');
-  if (modalPend) {
-    modalPend.addEventListener('click', function(e) {
-      if (e.target === this) fecharPendentes();
-    });
-  }
-});
-
-/* ================= REMOVER HISTÓRICO ================= */
-
-window.removerHistorico = function(i) {
-  let registro = historico[i];
-  if (!registro) return;
-  if (registro.tipo === "Entrada" && !registro.consumida && !registro._removidaEstoque && estoque[registro.item] && estoque[registro.item] > 0) {
-    if (confirm("❌ Não é permitido excluir uma entrada ativa no estoque.\n\nDeseja localizar esta bobina nos detalhes do tipo?")) {
-      irParaBobinaNosDetalhes(registro, i);
-    }
-    return;
-  }
-  if (!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
-  salvarEstadoParaDesfazer();
-  historico.splice(i, 1);
-  salvarDados();
-  atualizarHistorico();
-  mostrarToast('Registro removido');
-};
-
-/* ================= MENU CONFIGURAÇÕES ================= */
-
-function configOcultarTodasAsTelas() {
-  ['configMenuPrincipal', 'configTelaExportar', 'configTelaBackup', 'configTelaCadastro'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.add('hidden');
-    el.style.display = 'none';
-  });
-}
-
-function configMostrarTela(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.classList.remove('hidden');
-  el.style.display = 'flex';
-  el.style.flexDirection = 'column';
-  el.style.gap = '8px';
-}
-
-function abrirModalConfig() {
-  const modal = document.getElementById('modalConfig');
-  if (!modal) return;
-  modal.removeAttribute('style');
-  modal.classList.remove('hidden');
-  voltarConfigPrincipal();
-}
-
-function fecharModalConfig() {
-  const modal = document.getElementById('modalConfig');
-  if (!modal) return;
-  modal.classList.add('hidden');
-}
-
-function voltarConfigPrincipal() {
-  const titulo = document.getElementById('configTitulo');
-  if (titulo) titulo.textContent = 'Configurações';
-
-  configOcultarTodasAsTelas();
-  configMostrarTela('configMenuPrincipal');
-}
-
-function abrirConfigExportar() {
-  const titulo = document.getElementById('configTitulo');
-  if (titulo) titulo.textContent = 'Exportar dados';
-
-  configOcultarTodasAsTelas();
-  configMostrarTela('configTelaExportar');
-
-  if (typeof resetarMenuExportar === 'function') resetarMenuExportar();
-}
-
-function abrirConfigBackup() {
-  const titulo = document.getElementById('configTitulo');
-  if (titulo) titulo.textContent = 'Backup / Restaurar';
-
-  configOcultarTodasAsTelas();
-  configMostrarTela('configTelaBackup');
-}
-
-function abrirConfigCadastro() {
-  const titulo = document.getElementById('configTitulo');
-  if (titulo) titulo.textContent = 'Gerenciar cadastro';
-
-  configOcultarTodasAsTelas();
-  configMostrarTela('configTelaCadastro');
-
-  if (typeof renderizarCadastro === 'function') renderizarCadastro();
-}
-
-function alternarModoEscuro() {
-  document.body.classList.toggle('dark-mode');
-  let ativo = document.body.classList.contains('dark-mode');
-  localStorage.setItem('modoEscuro', ativo);
-
-  let toggle = document.getElementById('darkModeToggle');
-  if (toggle) toggle.checked = ativo;
-
-  let icone = document.getElementById('darkModeIcon');
-  if (icone) icone.textContent = ativo ? '☀️' : '🌙';
-}
-
 /* ================= SISTEMA DE DESFAZER / REFAZER ================= */
 
 let pilhaDesfazer = [];
@@ -2323,6 +2059,567 @@ function atualizarBotoesDesfazerRefazer() {
   }
 }
 
+/* ================= SAÍDA COM SELEÇÃO DE BOBINAS ================= */
+
+let modoSugestao = 'peso';
+let saidaAtual = { identificador: null, pesoTotal: 0, pesoRestante: 0, bobinas: [], descontos: {}, zeradas: [], combinacoes: [], comboAtual: 0 };
+let bobinaZeradaAtual = null;
+
+function encontrarMelhorCombinacao(bobinas, pesoAlvo) {
+  return encontrarTodasCombinacoes(bobinas, pesoAlvo)[0] || [];
+}
+
+function alternarModoSugestao() {
+  modoSugestao = modoSugestao === 'peso' ? 'idade' : 'peso';
+  recalcularSugestoes();
+}
+
+function recalcularSugestoes() {
+  if (modoSugestao === 'idade') {
+    let pesoAlvo = saidaAtual.pesoTotal;
+    let bobinas = saidaAtual.bobinas;
+
+    let indicesOrdenados = bobinas.map((bob, idx) => {
+      let dataString = bob.dataProducao || bob.data;
+      let timestampOrdenacao = "99999999999999";
+      if (dataString) {
+        let partes = dataString.split(", ");
+        if (partes.length > 0) {
+          let dma = partes[0].split("/");
+          if (dma.length === 3) {
+            let ano = dma[2], mes = dma[1].padStart(2,'0'), dia = dma[0].padStart(2,'0');
+            let hora = "000000";
+            if (partes[1]) hora = partes[1].replace(/:/g, "").padEnd(6,'0');
+            timestampOrdenacao = ano + mes + dia + hora;
+          }
+        }
+      }
+      return { idx: idx, ts: timestampOrdenacao };
+    });
+
+    indicesOrdenados.sort((a, b) => a.ts.localeCompare(b.ts));
+    let ordemIdade = indicesOrdenados.map(o => o.idx);
+
+    let combo1 = [], soma1 = 0;
+    for (let i = 0; i < ordemIdade.length; i++) {
+      combo1.push(ordemIdade[i]);
+      soma1 += bobinas[ordemIdade[i]].qtd;
+      if (soma1 >= pesoAlvo) break;
+    }
+
+    let combo2 = combo1.length > 1 ? combo1.slice(0, -1) : [];
+
+    let combo3 = [...combo1];
+    let usados = new Set(combo3);
+    for (let i = 0; i < ordemIdade.length; i++) {
+      if (!usados.has(ordemIdade[i])) { combo3.push(ordemIdade[i]); break; }
+    }
+
+    let candidatas = [
+      { indices: combo1, soma: combo1.reduce((a, i) => a + bobinas[i].qtd, 0) },
+      { indices: combo2, soma: combo2.reduce((a, i) => a + bobinas[i].qtd, 0) },
+      { indices: combo3, soma: combo3.reduce((a, i) => a + bobinas[i].qtd, 0) }
+    ];
+    candidatas.forEach(c => { c.diffAbs = Math.abs(c.soma - pesoAlvo); });
+
+    let combos = [], chaves = new Set();
+    candidatas.forEach(c => {
+      if (c.indices.length === 0) return;
+      let ch = Math.round(c.soma) + '|' + c.indices.length;
+      if (!chaves.has(ch)) { chaves.add(ch); combos.push(c); }
+    });
+    combos.sort((a, b) => {
+      if (a.diffAbs !== b.diffAbs) return a.diffAbs - b.diffAbs;
+      return a.indices.length - b.indices.length;
+    });
+    saidaAtual.combinacoes = combos.slice(0, 3).map(c => c.indices);
+  } else {
+    saidaAtual.combinacoes = encontrarTodasCombinacoes(saidaAtual.bobinas, saidaAtual.pesoTotal);
+  }
+
+  saidaAtual.comboAtual = 0;
+  saidaAtual.descontos = {};
+  saidaAtual.zeradas = [];
+
+  if (saidaAtual.combinacoes.length > 0) {
+    saidaAtual.combinacoes[0].forEach(idx => {
+      let indexReal = historico.indexOf(saidaAtual.bobinas[idx]);
+      saidaAtual.descontos[indexReal] = saidaAtual.bobinas[idx].qtd;
+      saidaAtual.zeradas.push(indexReal);
+    });
+  }
+  renderizarBobinasSaida();
+}
+
+window.alternarModoSugestao = alternarModoSugestao;
+
+function encontrarTodasCombinacoes(bobinas, pesoAlvo) {
+  let n = bobinas.length;
+  let todas = [];
+
+  if (n <= 20) {
+    let totalCombinacoes = Math.pow(2, n);
+    for (let mask = 1; mask < totalCombinacoes; mask++) {
+      let soma = 0, indices = [];
+      for (let i = 0; i < n; i++) {
+        if (mask & (1 << i)) { soma += bobinas[i].qtd; indices.push(i); }
+      }
+      todas.push({ indices, soma, diffAbs: Math.abs(soma - pesoAlvo) });
+    }
+  } else {
+    let ordenadas = bobinas.map((b, i) => ({ idx: i, peso: b.qtd })).sort((a, b) => b.peso - a.peso);
+    let tentativas = [];
+    let soma1 = 0, idx1 = [];
+    for (let b of ordenadas) { idx1.push(b.idx); soma1 += b.peso; if (soma1 >= pesoAlvo) break; }
+    tentativas.push({ indices: idx1, soma: soma1, diffAbs: Math.abs(soma1 - pesoAlvo) });
+    let asc = [...ordenadas].reverse();
+    let soma2 = 0, idx2 = [];
+    for (let b of asc) { idx2.push(b.idx); soma2 += b.peso; if (soma2 >= pesoAlvo) break; }
+    tentativas.push({ indices: idx2, soma: soma2, diffAbs: Math.abs(soma2 - pesoAlvo) });
+    let soma3 = 0, idx3 = [];
+    for (let i = 1; i < ordenadas.length; i++) { idx3.push(ordenadas[i].idx); soma3 += ordenadas[i].peso; if (soma3 >= pesoAlvo) break; }
+    if (idx3.length) tentativas.push({ indices: idx3, soma: soma3, diffAbs: Math.abs(soma3 - pesoAlvo) });
+    todas = tentativas;
+  }
+
+  todas.sort((a, b) => {
+    if (a.diffAbs !== b.diffAbs) return a.diffAbs - b.diffAbs;
+    if (a.indices.length !== b.indices.length) return a.indices.length - b.indices.length;
+    return a.soma - b.soma;
+  });
+
+  let unicas = [], vistas = new Set();
+  todas.forEach(combo => {
+    let chave = Math.round(combo.soma) + '|' + combo.indices.length;
+    if (!vistas.has(chave)) { vistas.add(chave); unicas.push(combo); }
+  });
+  return unicas.slice(0, 3).map(c => c.indices);
+}
+
+function abrirModalSaida(identificador, pesoSaida) {
+  saidaAtual.identificador = identificador;
+  saidaAtual.pesoTotal = pesoSaida;
+  saidaAtual.pesoRestante = pesoSaida;
+  saidaAtual.descontos = {};
+  saidaAtual.zeradas = [];
+
+  let entradas = historico.filter(h => h.item === identificador && h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque);
+  let pesoAtual = estoque[identificador] || 0;
+  let bobinas = [], soma = 0;
+  for (let i = entradas.length - 1; i >= 0; i--) {
+    if (soma >= pesoAtual) break;
+    bobinas.unshift(entradas[i]);
+    soma += entradas[i].qtd;
+  }
+  saidaAtual.bobinas = bobinas;
+  saidaAtual.combinacoes = encontrarTodasCombinacoes(bobinas, pesoSaida);
+  saidaAtual.comboAtual = 0;
+  aplicarCombinacao(0);
+  document.getElementById('modalSaidaTitulo').textContent = identificador;
+  renderizarBobinasSaida();
+  document.getElementById('modalSaida').classList.remove('hidden');
+}
+
+function aplicarCombinacao(indice) {
+  if (indice < 0 || indice >= saidaAtual.combinacoes.length) return;
+  saidaAtual.comboAtual = indice;
+  saidaAtual.descontos = {};
+  saidaAtual.zeradas = [];
+  saidaAtual.combinacoes[indice].forEach(idx => {
+    let indexReal = historico.indexOf(saidaAtual.bobinas[idx]);
+    saidaAtual.descontos[indexReal] = saidaAtual.bobinas[idx].qtd;
+    saidaAtual.zeradas.push(indexReal);
+  });
+  renderizarBobinasSaida();
+}
+
+function proximaCombinacao() {
+  let proximo = saidaAtual.comboAtual + 1;
+  if (proximo >= saidaAtual.combinacoes.length) proximo = 0;
+  aplicarCombinacao(proximo);
+}
+
+function combinacaoAnterior() {
+  let anterior = saidaAtual.comboAtual - 1;
+  if (anterior < 0) anterior = saidaAtual.combinacoes.length - 1;
+  aplicarCombinacao(anterior);
+}
+
+window.proximaCombinacao = proximaCombinacao;
+window.combinacaoAnterior = combinacaoAnterior;
+
+function renderizarBobinasSaida() {
+  let tbody = document.getElementById('modalSaidaBody');
+  let html = '';
+  let totalSelecionado = 0;
+  let opPeso = Math.round(saidaAtual.pesoTotal);
+
+  saidaAtual.bobinas.forEach((bob, idx) => {
+    let indexReal = historico.indexOf(bob);
+    let selecionada = saidaAtual.zeradas.includes(indexReal);
+    if (selecionada) totalSelecionado += bob.qtd;
+    html += `
+      <tr class="${selecionada ? 'bobina-marcada' : ''}">
+        <td>
+          <input type="radio" ${selecionada ? 'checked' : ''} onclick="selecionarBobinaSaida(${indexReal})"
+            style="width:18px;height:18px;margin:0;cursor:pointer;">
+        </td>
+        <td style="font-size:14px;"><strong>${idx + 1}</strong></td>
+        <td style="font-size:13px;">${bob.data}</td>
+        <td style="font-size:15px;"><strong>${formatarPeso(bob.qtd)}</strong></td>
+      </tr>
+    `;
+  });
+
+  tbody.innerHTML = html;
+
+  let diferenca = totalSelecionado - opPeso;
+  let titulo = document.getElementById('modalSaidaTitulo');
+  let partes = saidaAtual.identificador.split(' - V');
+  let item = partes[0], versao = partes[1] || '';
+  let tipo = descobrirTipoPorItem(item);
+
+  let corTipo = '#64748b', fundoTipo = '#f1f5f9';
+  if (tipo === 'brf') { corTipo = '#1d4ed8'; fundoTipo = '#dbeafe'; }
+else if (tipo === 'tampas') { corTipo = '#15803d'; fundoTipo = '#dcfce7'; }
+else if (tipo === 'fundo') { corTipo = '#7c3aed'; fundoTipo = '#ede9fe'; }
+else if (tipo === 'laminacao') { corTipo = '#c2410c'; fundoTipo = '#ffedd5'; }
+
+  let iconeAtivo = modoSugestao === 'peso' ? '⚖️' : '📅';
+  let tooltipAtivo = modoSugestao === 'peso' ? 'Modo: melhor peso' : 'Modo: mais antigas';
+
+  titulo.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;width:100%;gap:6px;">
+      <div style="display:flex;align-items:center;gap:6px;line-height:1.2;overflow:hidden;">
+        <span style="display:inline-flex;align-items:center;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:0.3px;background:${fundoTipo};color:${corTipo};white-space:nowrap;flex-shrink:0;">${nomeBonitoTipo(tipo)}</span>está 
+        <span style="font-size:15px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item}</span>
+        <span style="display:inline-flex;align-items:center;padding:2px 6px;border-radius:999px;font-size:11px;font-weight:700;background:#e2e8f0;color:#475569;flex-shrink:0;">V${versao}</span>
+      </div>
+      <button onclick="alternarModoSugestao()" title="${tooltipAtivo}" style="width:32px;height:32px;padding:0;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">${iconeAtivo}</button>
+    </div>
+  `;
+
+  let statusTexto = '', statusCor = '#dc2626';
+  if (totalSelecionado === 0) {
+    statusTexto = `${formatarPeso(0)} / ${formatarPeso(opPeso)}`;
+  } else if (diferenca === 0) {
+    statusTexto = `${formatarPeso(totalSelecionado)} / ${formatarPeso(opPeso)}`;
+    statusCor = '#16a34a';
+  } else if (diferenca > 0) {
+    statusTexto = `${formatarPeso(totalSelecionado)} / ${formatarPeso(opPeso)} (+${formatarPeso(diferenca)} kg)`;
+    statusCor = '#16a34a';
+  } else {
+    statusTexto = `${formatarPeso(totalSelecionado)} / ${formatarPeso(opPeso)} (-${formatarPeso(Math.abs(diferenca))} kg)`;
+  }
+
+  let containerStatus = document.getElementById('saidaStatusContainer');
+  let headerSaida = document.querySelector('#modalSaida .modal-saida-header');
+  if (!containerStatus) {
+    containerStatus = document.createElement('div');
+    containerStatus.id = 'saidaStatusContainer';
+    let restanteAntigo = document.getElementById('modalSaidaRestante');
+    if (restanteAntigo) restanteAntigo.style.display = 'none';
+    if (headerSaida) { headerSaida.style.paddingBottom = '4px'; headerSaida.insertAdjacentElement('afterend', containerStatus); }
+  }
+
+  containerStatus.style.cssText = `width:100%;margin:4px 0 6px;display:flex;flex-direction:column;gap:4px;border-bottom:1px solid #e2e8f0;padding-bottom:8px;`;
+
+  let selecionadas = saidaAtual.zeradas.length;
+  let totalBobinas = saidaAtual.bobinas.length;
+  let labelModo = modoSugestao === 'peso' ? 'Sugestões por peso:' : 'Sugestões por idade:';
+
+  let navHtml = '';
+  if (saidaAtual.combinacoes.length > 1) {
+    navHtml = `
+      <button onclick="combinacaoAnterior()" style="width:28px;height:28px;padding:0;border:none;border-radius:6px;background:#1e3a8a;color:#ffffff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">◀</button>
+      <span style="font-size:12px;font-weight:600;color:#64748b;min-width:30px;text-align:center;flex-shrink:0;">${saidaAtual.comboAtual + 1}/${saidaAtual.combinacoes.length}</span>
+      <button onclick="proximaCombinacao()" style="width:28px;height:28px;padding:0;border:none;border-radius:6px;background:#1e3a8a;color:#ffffff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">▶</button>
+    `;
+  }
+
+  containerStatus.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+      <span style="font-size:11px;color:#94a3b8;font-weight:500;">${saidaAtual.combinacoes.length > 1 ? labelModo : ''}</span>
+      <span style="font-size:12px;font-weight:600;color:${selecionadas > 0 ? '#1e3a8a' : '#94a3b8'};">${selecionadas} / ${totalBobinas} bobinas</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;width:100%;gap:6px;">
+      <div style="font-size:15px;font-weight:700;color:${statusCor};font-variant-numeric:tabular-nums;white-space:nowrap;">${statusTexto}</div>
+      <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">${navHtml}</div>
+    </div>
+  `;
+
+  let thDesmarcar = document.getElementById('thDesmarcar');
+  if (thDesmarcar) {
+    if (selecionadas > 0) {
+      thDesmarcar.innerHTML = `<input type="radio" checked onclick="desmarcarTodasBobinas()" style="width:18px;height:18px;margin:0;cursor:pointer;" title="Desmarcar todas">`;
+    } else {
+      thDesmarcar.innerHTML = '';
+    }
+  }
+}
+
+function selecionarBobinaSaida(indexReal) {
+  let bob = historico[indexReal];
+  if (!bob) return;
+  let pos = saidaAtual.zeradas.indexOf(indexReal);
+  if (pos !== -1) { saidaAtual.zeradas.splice(pos, 1); delete saidaAtual.descontos[indexReal]; }
+  else { saidaAtual.descontos[indexReal] = bob.qtd; saidaAtual.zeradas.push(indexReal); }
+  renderizarBobinasSaida();
+}
+
+function desmarcarTodasBobinas() {
+  saidaAtual.descontos = {};
+  saidaAtual.zeradas = [];
+  renderizarBobinasSaida();
+}
+window.desmarcarTodasBobinas = desmarcarTodasBobinas;
+
+function confirmarSaida() {
+  if (saidaAtual.zeradas.length === 0) { mostrarToast('Selecione pelo menos uma bobina', 'erro'); return; }
+  let totalSelecionado = saidaAtual.zeradas.reduce((acc, idx) => acc + (historico[idx] ? historico[idx].qtd : 0), 0);
+  if (totalSelecionado < saidaAtual.pesoTotal) {
+    if (!confirm('Peso selecionado (' + Math.round(totalSelecionado) + ' kg) é menor que o pedido (' + Math.round(saidaAtual.pesoTotal) + ' kg).\n\nConfirmar mesmo assim?')) return;
+  }
+  processarZeradas(0);
+}
+
+function processarZeradas(indice) {
+  if (indice >= saidaAtual.zeradas.length) { finalizarSaida(); return; }
+  bobinaZeradaAtual = { indexReal: saidaAtual.zeradas[indice], indiceZerada: indice };
+  let bob = historico[bobinaZeradaAtual.indexReal];
+  document.getElementById('modalZerouTexto').textContent = 'Bobina #' + (saidaAtual.bobinas.indexOf(bob)+1) + ' — ' + Math.round(bob.qtd) + ' kg';
+  document.getElementById('modalZerou').classList.remove('hidden');
+}
+
+function zerouConsumir() {
+  historico[bobinaZeradaAtual.indexReal]._consumir = true;
+  document.getElementById('modalZerou').classList.add('hidden');
+  processarZeradas(bobinaZeradaAtual.indiceZerada + 1);
+}
+
+function zerouExcluir() {
+  historico[bobinaZeradaAtual.indexReal]._excluir = true;
+  document.getElementById('modalZerou').classList.add('hidden');
+  processarZeradas(bobinaZeradaAtual.indiceZerada + 1);
+}
+
+function finalizarSaida() {
+  salvarEstadoParaDesfazer();
+  let bobsConsumidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._consumir);
+  let bobsExcluidas = saidaAtual.zeradas.filter(idx => historico[idx] && historico[idx]._excluir);
+  let partesMsg = saidaAtual.identificador.split(" - V");
+  let itemNome = partesMsg[0], versaoNome = partesMsg[1];
+  let mensagemFinal = "", totalSaiu = 0;
+
+  bobsConsumidas.forEach(idx => {
+    let bob = historico[idx];
+    if (!bob) return;
+    bob.consumida = true;
+    totalSaiu += bob.qtd;
+    historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Consumo', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
+    mensagemFinal += "Bobina consumida (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n";
+    delete bob._consumir;
+  });
+
+  bobsExcluidas.forEach(idx => {
+    let bob = historico[idx];
+    if (!bob) return;
+    bob._removidaEstoque = true;
+    totalSaiu += bob.qtd;
+    historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: saidaAtual.identificador, qtd: bob.qtd, refEntradaId: bob.id, refEntradaData: bob.data });
+    mensagemFinal += "Bobina excluída (" + itemNome + ", V" + versaoNome + ", " + Math.round(bob.qtd) + "kg)\n";
+    delete bob._excluir;
+  });
+
+  if (estoque[saidaAtual.identificador]) {
+    estoque[saidaAtual.identificador] -= totalSaiu;
+    let qtdKey = saidaAtual.identificador + '_qtd';
+    if (estoque[qtdKey]) {
+      estoque[qtdKey] -= saidaAtual.zeradas.length;
+      if (estoque[qtdKey] < 0) estoque[qtdKey] = 0;
+    }
+    if (estoque[saidaAtual.identificador] <= 0) {
+      delete estoque[saidaAtual.identificador];
+      delete estoque[saidaAtual.identificador + '_qtd'];
+    }
+  }
+
+  for (let i = historico.length - 1; i >= 0; i--) {
+    if (!historico[i]) continue;
+    if (historico[i]._excluir) delete historico[i]._excluir;
+    if (historico[i]._consumir) delete historico[i]._consumir;
+  }
+
+  salvarDados();
+  atualizarTabela();
+  atualizarHistorico();
+  document.getElementById('modalSaida').classList.add('hidden');
+
+  tipoSelect.value = '';
+  itemSelect.innerHTML = '<option value="">Selecionar item</option>';
+  versaoSelect.innerHTML = '<option value="">Selecionar versão</option>';
+  quantidade.value = '';
+  document.getElementById('buscaItem').value = '';
+  if (saldoAtual) saldoAtual.innerHTML = "";
+
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  mostrarToast('Saída aplicada — ' + Math.round(totalSaiu) + ' kg');
+  setTimeout(function() { if (mensagemFinal) alert(mensagemFinal); }, 150);
+}
+
+function cancelarSaida() {
+  saidaAtual = { identificador: null, pesoTotal: 0, pesoRestante: 0, bobinas: [], descontos: {}, zeradas: [] };
+  document.getElementById('modalSaida').classList.add('hidden');
+}
+
+/* ================= LONG PRESS LIMPAR TUDO ================= */
+
+document.addEventListener("DOMContentLoaded", function() {
+  configurarLongPress(document.getElementById('btnLimparEstoque'), function() {
+    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir TODO o estoque?\n\nAs exclusões serão registradas no histórico.")) return;
+    salvarEstadoParaDesfazer();
+    let alterou = excluirTodoEstoqueComHistorico();
+    salvarDados(); atualizarTabela(); atualizarHistorico();
+    if (tipoDetalheAtual) atualizarDetalhes();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    if (alterou) mostrarToast('Estoque excluído');
+    else mostrarToast('Nenhum item no estoque', 'erro');
+  });
+
+  configurarLongPress(document.getElementById('btnLimparHistorico'), function() {
+    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja limpar o histórico?\n\nRegistros de bobinas que ainda estão no estoque serão mantidos.")) return;
+    historico = historico.filter(h => h.tipo === "Entrada" && !h.consumida && !h._removidaEstoque && estoque[h.item] > 0);
+    salvarDados(); atualizarHistorico();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    mostrarToast('Histórico limpo');
+  });
+
+  configurarLongPress(document.getElementById('btnLimparDetalhes'), function() {
+    if (!tipoDetalheAtual) return;
+    let nomeTipo = nomeCompletoTipo(tipoDetalheAtual);
+    if (!confirm("⚠️ ATENÇÃO!\n\nDeseja excluir todo o estoque de " + nomeTipo + "?\n\nAs exclusões serão registradas no histórico.")) return;
+    salvarEstadoParaDesfazer();
+    let alterou = excluirEstoquePorTipoComHistorico(tipoDetalheAtual);
+    salvarDados(); atualizarTabela(); atualizarHistorico(); atualizarDetalhes();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    if (alterou) mostrarToast(nomeTipo + ' excluído');
+    else mostrarToast('Nenhum item de ' + nomeTipo, 'erro');
+  });
+
+  let btnLimparFiltro = document.getElementById("btnLimparFiltro");
+  if (btnLimparFiltro) {
+    btnLimparFiltro.addEventListener("click", function() {
+      document.getElementById("dataInicio").value = "";
+      document.getElementById("dataFim").value = "";
+      document.getElementById("buscaHistorico").value = "";
+      atualizarHistorico();
+    });
+  }
+
+  let modalGer = document.getElementById('modalGerador');
+  if (modalGer) {
+    modalGer.addEventListener('click', function(e) { if (e.target === this) geradorFecharSimples(); });
+  }
+
+  let modalPend = document.getElementById('modalPendentes');
+  if (modalPend) {
+    modalPend.addEventListener('click', function(e) { if (e.target === this) fecharPendentes(); });
+  }
+});
+
+/* ================= REMOVER HISTÓRICO ================= */
+
+window.removerHistorico = function(i) {
+  let registro = historico[i];
+  if (!registro) return;
+  if (registro.tipo === "Entrada" && !registro.consumida && !registro._removidaEstoque && estoque[registro.item] && estoque[registro.item] > 0) {
+    if (confirm("❌ Não é permitido excluir uma entrada ativa no estoque.\n\nDeseja localizar esta bobina nos detalhes do tipo?")) {
+      irParaBobinaNosDetalhes(registro, i);
+    }
+    return;
+  }
+  if (!confirm("Tem certeza que deseja remover este registro do histórico?")) return;
+  salvarEstadoParaDesfazer();
+  historico.splice(i, 1);
+  salvarDados();
+  atualizarHistorico();
+  mostrarToast('Registro removido');
+};
+
+/* ================= MENU CONFIGURAÇÕES ================= */
+
+function configOcultarTodasAsTelas() {
+  ['configMenuPrincipal', 'configTelaExportar', 'configTelaBackup', 'configTelaCadastro'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add('hidden');
+    el.style.display = 'none';
+  });
+}
+
+function configMostrarTela(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('hidden');
+  el.style.display = 'flex';
+  el.style.flexDirection = 'column';
+  el.style.gap = '8px';
+}
+
+function abrirModalConfig() {
+  const modal = document.getElementById('modalConfig');
+  if (!modal) return;
+  modal.removeAttribute('style');
+  modal.classList.remove('hidden');
+  voltarConfigPrincipal();
+}
+
+function fecharModalConfig() {
+  const modal = document.getElementById('modalConfig');
+  if (!modal) return;
+  modal.classList.add('hidden');
+}
+
+function voltarConfigPrincipal() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Configurações';
+  configOcultarTodasAsTelas();
+  configMostrarTela('configMenuPrincipal');
+}
+
+function abrirConfigExportar() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Exportar dados';
+  configOcultarTodasAsTelas();
+  configMostrarTela('configTelaExportar');
+  if (typeof resetarMenuExportar === 'function') resetarMenuExportar();
+}
+
+function abrirConfigBackup() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Backup / Restaurar';
+  configOcultarTodasAsTelas();
+  configMostrarTela('configTelaBackup');
+}
+
+function abrirConfigCadastro() {
+  const titulo = document.getElementById('configTitulo');
+  if (titulo) titulo.textContent = 'Gerenciar cadastro';
+  configOcultarTodasAsTelas();
+  configMostrarTela('configTelaCadastro');
+  if (typeof renderizarCadastro === 'function') renderizarCadastro();
+}
+
+function alternarModoEscuro() {
+  document.body.classList.toggle('dark-mode');
+  let ativo = document.body.classList.contains('dark-mode');
+  localStorage.setItem('modoEscuro', ativo);
+  let toggle = document.getElementById('darkModeToggle');
+  if (toggle) toggle.checked = ativo;
+  let icone = document.getElementById('darkModeIcon');
+  if (icone) icone.textContent = ativo ? '☀️' : '🌙';
+}
+
 /* ================= GERENCIAR CADASTRO ================= */
 
 window.abrirConfigCadastro = function() {
@@ -2336,15 +2633,19 @@ window.abrirConfigCadastro = function() {
 
 function renderizarCadastro() {
   let container = document.getElementById('cadastroAcordeao');
-  let tiposAbertos = [];
-  let itensAbertos = [];
+  if (!container) return;
+
+  let tiposAbertos = [], itensAbertos = [];
   container.querySelectorAll('.cad-tipo.aberto').forEach(el => { tiposAbertos.push(el.dataset.tipo); });
   container.querySelectorAll('.cad-item.aberto').forEach(el => { itensAbertos.push(el.dataset.tipo + '|' + el.dataset.item); });
+
   container.innerHTML = '';
 
+  // ✅ VERSÃO CORRIGIDA COM FUNDO
   let tipos = [
     { chave: 'brf', nome: 'BRF' },
     { chave: 'tampas', nome: 'Tampas' },
+    { chave: 'fundo', nome: 'Fundo' },
     { chave: 'laminacao', nome: '1ª Laminação' }
   ];
 
@@ -2360,11 +2661,8 @@ function renderizarCadastro() {
 
     let header = document.createElement('button');
     header.className = 'cad-tipo-header';
-    header.innerHTML = `
-      <span>${tipo.nome} <span style="font-weight:400; font-size:12px; opacity:0.7;">(${itens.length} itens, ${totalVersoes} versões)</span></span>
-      <span class="cad-seta">▶</span>
-    `;
-    header.onclick = function() { divTipo.classList.toggle('aberto'); };
+    header.innerHTML = `<span>${tipo.nome} <span style="font-weight:400;font-size:12px;opacity:0.7;">(${itens.length} itens, ${totalVersoes} versões)</span></span><span class="cad-seta">▶</span>`;
+    header.onclick = function () { divTipo.classList.toggle('aberto'); };
 
     let body = document.createElement('div');
     body.className = 'cad-tipo-body';
@@ -2386,7 +2684,7 @@ function renderizarCadastro() {
         <span class="cad-btn-mini" title="Renomear" onclick="event.stopPropagation(); editarNomeItem('${tipo.chave}', '${itemNome}')">✏️</span>
         <span class="cad-btn-mini excluir" title="Excluir item" onclick="event.stopPropagation(); removerItem('${tipo.chave}', '${itemNome}')">🗑️</span>
       `;
-      itemHeader.onclick = function(e) {
+      itemHeader.onclick = function (e) {
         if (e.target.classList.contains('cad-btn-mini')) return;
         divItem.classList.toggle('aberto');
       };
@@ -2414,7 +2712,7 @@ function renderizarCadastro() {
       let btnAddVersao = document.createElement('button');
       btnAddVersao.className = 'cad-btn-add';
       btnAddVersao.textContent = '+ Adicionar versão';
-      btnAddVersao.onclick = function() { adicionarVersao(tipo.chave, itemNome); };
+      btnAddVersao.onclick = function () { adicionarVersao(tipo.chave, itemNome); };
       itemBody.appendChild(btnAddVersao);
 
       divItem.appendChild(itemHeader);
@@ -2425,7 +2723,7 @@ function renderizarCadastro() {
     let btnAddItem = document.createElement('button');
     btnAddItem.className = 'cad-btn-add';
     btnAddItem.textContent = '+ Adicionar item';
-    btnAddItem.onclick = function() { adicionarItem(tipo.chave); };
+    btnAddItem.onclick = function () { adicionarItem(tipo.chave); };
     body.appendChild(btnAddItem);
 
     divTipo.appendChild(header);
@@ -2440,9 +2738,7 @@ window.adicionarItem = function(tipo) {
   nome = nome.trim();
   if (banco[tipo][nome]) { mostrarToast('Este item já existe!', 'erro'); return; }
   banco[tipo][nome] = {};
-  salvarBanco();
-  renderizarCadastro();
-  mostrarToast('Item adicionado');
+  salvarBanco(); renderizarCadastro(); mostrarToast('Item adicionado');
 };
 
 window.editarNomeItem = function(tipo, itemAntigo) {
@@ -2471,19 +2767,14 @@ window.editarNomeItem = function(tipo, itemAntigo) {
   }
   banco[tipo][novoNome] = banco[tipo][itemAntigo];
   delete banco[tipo][itemAntigo];
-  salvarBanco();
-  renderizarCadastro();
-  atualizarTudo();
-  mostrarToast('Item renomeado');
+  salvarBanco(); renderizarCadastro(); atualizarTudo(); mostrarToast('Item renomeado');
 };
 
 window.removerItem = function(tipo, item) {
   let versoes = Object.keys(banco[tipo][item]).length;
   if (!confirm("Excluir " + item + " e suas " + versoes + " versão(ões)?")) return;
   delete banco[tipo][item];
-  salvarBanco();
-  renderizarCadastro();
-  mostrarToast('Item excluído');
+  salvarBanco(); renderizarCadastro(); mostrarToast('Item excluído');
 };
 
 window.adicionarVersao = function(tipo, item) {
@@ -2494,9 +2785,7 @@ window.adicionarVersao = function(tipo, item) {
   let tamanho = prompt("Medidas (ex: 66 x 60):");
   if (!tamanho || !tamanho.trim()) return;
   banco[tipo][item][versao] = { tamanho: tamanho.trim() };
-  salvarBanco();
-  renderizarCadastro();
-  mostrarToast('Versão adicionada');
+  salvarBanco(); renderizarCadastro(); mostrarToast('Versão adicionada');
 };
 
 window.editarVersao = function(tipo, item, versao) {
@@ -2525,10 +2814,7 @@ window.editarVersao = function(tipo, item, versao) {
     delete banco[tipo][item][versao];
   }
   banco[tipo][item][novaVersao] = { tamanho: novoTamanho };
-  salvarBanco();
-  renderizarCadastro();
-  atualizarTudo();
-  mostrarToast('Versão atualizada');
+  salvarBanco(); renderizarCadastro(); atualizarTudo(); mostrarToast('Versão atualizada');
 };
 
 window.removerVersao = function(tipo, item, versao) {
@@ -2536,17 +2822,48 @@ window.removerVersao = function(tipo, item, versao) {
   delete banco[tipo][item][versao];
   if (Object.keys(banco[tipo][item]).length === 0) {
     delete banco[tipo][item];
-    salvarBanco();
-    renderizarCadastro();
-    mostrarToast('Versão e item excluídos');
+    salvarBanco(); renderizarCadastro(); mostrarToast('Versão e item excluídos');
     return;
   }
-  salvarBanco();
-  renderizarCadastro();
-  mostrarToast('Versão excluída');
+  salvarBanco(); renderizarCadastro(); mostrarToast('Versão excluída');
 };
 
-/* ================= QR CODE ================= */
+/* ================= QR CODE — NOVO FORMATO B1/id/item/versao/peso ================= */
+
+function formatarNovoQR(idCompleto, item, versao, peso) {
+  let idCurto = extrairIdCurtoBobina(idCompleto);
+  if (!idCurto) {
+    idCurto = idCompleto
+      ? String(idCompleto).replace(/-/g, '').substring(0, 8).toLowerCase()
+      : crypto.randomUUID().replace(/-/g, '').substring(0, 8);
+  }
+  return 'B1/' + idCurto + '/' + item + '/' + versao + '/' + Math.round(peso);
+}
+
+function extrairIdCurtoBobina(valor) {
+  if (!valor) return '';
+  let str = String(valor).trim().toLowerCase();
+
+  // Novo formato: B1/id/item/versao/peso
+  if (str.startsWith('b1/')) {
+    let partes = str.split('/');
+    if (partes.length >= 2 && partes[1].length === 8 && /^[a-f0-9]{8}$/.test(partes[1])) return partes[1];
+  }
+
+  // Formato antigo BOB/item/versao/peso/.../id
+  let semPrefixo = str.replace(/^bob\//i, '');
+  let partes = semPrefixo.split('/');
+  let ultima = partes[partes.length - 1] || '';
+  if (/^[a-f0-9]{8}$/i.test(ultima)) return ultima.toLowerCase();
+
+  // UUID completo
+  if (/^[a-f0-9-]{32,36}$/i.test(str)) return str.replace(/-/g, '').substring(0, 8).toLowerCase();
+
+  // ID curto isolado
+  if (/^[a-f0-9]{8}$/i.test(str)) return str.toLowerCase();
+
+  return '';
+}
 
 function gerarQRBobina(index) {
   let reg = historico[index];
@@ -2562,31 +2879,28 @@ function gerarQRBobina(index) {
     tamanho = banco[tipo][item][versao].tamanho;
   }
 
-  let dataQR = "", dataProducao = "";
+  let dataProducao = "";
   if (reg.data) {
     let partesData = reg.data.split(", ");
     if (partesData.length === 2) {
       let dma = partesData[0].split("/");
-      let hms = partesData[1].replace(/:/g, "");
-      if (dma.length === 3 && hms.length === 6) {
-        dataQR = dma[0] + dma[1] + dma[2] + "/" + hms;
+      if (dma.length === 3) {
         dataProducao = dma[0] + "/" + dma[1] + "/" + dma[2] + " às " + partesData[1];
       }
     }
   }
 
-  let idCurto = '';
-  if (reg.id && typeof reg.id === 'string' && reg.id.includes('-')) {
-    idCurto = reg.id.replace(/-/g, '').substring(0, 8);
-  }
+  // NOVO FORMATO
+  let conteudoQR = formatarNovoQR(reg.id, item, versao, reg.qtd);
 
-  let conteudoQR = item + "/" + versao + "/" + Math.round(reg.qtd);
-  if (dataQR) conteudoQR += "/" + dataQR;
-  if (idCurto) conteudoQR += "/" + idCurto;
+  let container = document.getElementById("qrContainer");
+  container.innerHTML = "";
 
-  document.getElementById("qrContainer").innerHTML = "";
+  let qrWrapper = document.createElement("div");
+  qrWrapper.style.cssText = "display:flex;justify-content:center;padding:8px;background:#f8fafc;border-radius:12px;border:1px solid #e2e8f0;";
+  container.appendChild(qrWrapper);
 
-  new QRCode(document.getElementById("qrContainer"), {
+  new QRCode(qrWrapper, {
     text: conteudoQR,
     width: 200,
     height: 200,
@@ -2595,17 +2909,69 @@ function gerarQRBobina(index) {
     correctLevel: QRCode.CorrectLevel.M
   });
 
+  let corTipo = tipo === 'brf' ? '#3b82f6' : tipo === 'tampas' ? '#16a34a' : tipo === 'fundo' ? '#8b5cf6' : tipo === 'laminacao' ? '#ea580c' : '#64748b';
+let bgTipo = tipo === 'brf' ? '#dbeafe' : tipo === 'tampas' ? '#dcfce7' : tipo === 'fundo' ? '#ede9fe' : tipo === 'laminacao' ? '#ffedd5' : '#f1f5f9';
+
   let infoDiv = document.createElement("div");
-  infoDiv.className = "qr-info";
+  infoDiv.style.cssText = "text-align:center;margin-top:14px;display:flex;flex-direction:column;gap:6px;";
   infoDiv.innerHTML = `
-    <div><strong>${item}</strong> — V${versao}</div>
-    <div>${tamanho}</div>
-    <div>${Math.round(reg.qtd)} kg</div>
-    <div style="font-size:11px; color:#94a3b8;">Produção: ${dataProducao || '-'}</div>
+    <div style="font-size:14px;font-weight:600;color:#1e293b;">
+      <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 6px;border-radius:4px;background:${bgTipo};color:${corTipo};margin-right:6px;">${nomeCompletoTipo(tipo)}</span>
+      ${item} · V${versao} · ${tamanho}
+    </div>
+    <div style="font-size:22px;font-weight:800;color:#1e3a8a;">${Math.round(reg.qtd)} kg</div>
+    <div style="font-size:11px;color:#94a3b8;">📅 ${dataProducao ? dataProducao.replace(' às ', ' - ') : 'Sem data'}</div>
   `;
-  document.getElementById("qrContainer").appendChild(infoDiv);
+  container.appendChild(infoDiv);
+
+  if (reg.consumida || reg._removidaEstoque) {
+    let statusDiv = document.createElement("div");
+    statusDiv.style.cssText = "text-align:center;margin-top:4px;";
+    if (reg.consumida) {
+      statusDiv.innerHTML = '<span style="font-size:12px;padding:3px 10px;border-radius:6px;background:#fefce8;color:#ca8a04;font-weight:600;">⚠️ Consumida</span>';
+    } else {
+      statusDiv.innerHTML = '<span style="font-size:12px;padding:3px 10px;border-radius:6px;background:#fef2f2;color:#dc2626;font-weight:600;">🚫 Excluída</span>';
+    }
+    container.appendChild(statusDiv);
+  }
+
+  let salvarDiv = document.createElement("div");
+  salvarDiv.style.cssText = "text-align:center;margin-top:10px;";
+  salvarDiv.innerHTML = `<button onclick="salvarImagemQR('${item}', '${versao}', ${Math.round(reg.qtd)})" style="background:#1e3a8a;color:white;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;width:100%;">📥 Salvar imagem</button>`;
+  container.appendChild(salvarDiv);
+
   document.getElementById("modalQR").classList.remove("hidden");
 }
+
+function salvarImagemQR(item, versao, peso) {
+  let qrWrapper = document.querySelector('#qrContainer > div:nth-child(2)');
+  if (!qrWrapper) { mostrarToast('Erro ao gerar imagem', 'erro'); return; }
+  let qrCanvas = qrWrapper.querySelector('canvas');
+  let qrImg = qrWrapper.querySelector('img');
+  let qrSrc = '';
+  if (qrCanvas) { qrSrc = qrCanvas.toDataURL('image/png'); }
+  else if (qrImg && qrImg.src) { qrSrc = qrImg.src; }
+  if (!qrSrc) { mostrarToast('QR não encontrado', 'erro'); return; }
+  let canvas = document.createElement('canvas');
+  canvas.width = 400; canvas.height = 340;
+  let ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 400, 340);
+  let img = new Image();
+  img.onload = function() {
+    ctx.drawImage(img, 100, 16, 200, 200);
+    ctx.fillStyle = '#1e293b'; ctx.textAlign = 'center';
+    ctx.font = 'bold 20px Arial'; ctx.fillText(item + ' — V' + versao, 200, 244);
+    ctx.font = 'bold 28px Arial'; ctx.fillStyle = '#1e3a8a'; ctx.fillText(peso + ' kg', 200, 278);
+    ctx.font = '12px Arial'; ctx.fillStyle = '#94a3b8'; ctx.fillText('Estoque Mobile', 200, 320);
+    let link = document.createElement('a');
+    link.download = (item + '_V' + versao + '_' + peso + 'kg.png').replace(/[^a-zA-Z0-9._-]/g, '_');
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    mostrarToast('Imagem salva');
+  };
+  img.src = qrSrc;
+}
+window.salvarImagemQR = salvarImagemQR;
 
 let historicoSelecionadoIndex = null;
 
@@ -2674,15 +3040,13 @@ async function abrirScannerQR() {
     document.getElementById("modalScannerQR").classList.remove("hidden");
     document.getElementById("scannerStatus").textContent = "Aponte a câmera para o QR da bobina";
     document.getElementById("reader").innerHTML = "";
+    const readerContainer = document.getElementById("reader");
+    if (readerContainer) readerContainer.classList.add("camera-feedback");
     leitorQR = new Html5Qrcode("reader");
     await leitorQR.start(
       { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 220, height: 220 } },
-      async (decodedText) => {
-        if (scannerProcessando) return;
-        scannerProcessando = true;
-        await processarLeituraQR(decodedText);
-      },
+      { fps: 18, qrbox: { width: 240, height: 240 } },
+      async (decodedText) => { await processarLeituraQR(decodedText); },
       () => {}
     );
     leitorQRAberto = true;
@@ -2695,10 +3059,7 @@ async function abrirScannerQR() {
 
 async function fecharScannerQR() {
   try {
-    if (leitorQR && leitorQRAberto) {
-      await leitorQR.stop();
-      await leitorQR.clear();
-    }
+    if (leitorQR && leitorQRAberto) { await leitorQR.stop(); await leitorQR.clear(); }
   } catch (e) { console.warn("Erro ao fechar scanner:", e); }
   leitorQR = null;
   leitorQRAberto = false;
@@ -2724,146 +3085,166 @@ async function processarLeituraQR(textoLido) {
   scannerProcessando = false;
 }
 
+function setCameraFeedback(tipo) {
+  const reader = document.getElementById('reader');
+  const readerContinuo = document.getElementById('readerContinuo');
+  let container = reader || readerContinuo;
+  if (!container) return;
+  container.classList.remove('success', 'warning', 'error');
+  if (tipo === 'sucesso') container.classList.add('success');
+  else if (tipo === 'duplicado' || tipo === 'jaExiste') container.classList.add('warning');
+  else if (tipo === 'erro') container.classList.add('error');
+  setTimeout(() => { container.classList.remove('success', 'warning', 'error'); }, 1100);
+}
+
+/* ================= PARSER QR — NOVO FORMATO + COMPATIBILIDADE ================= */
+
 function interpretarQRSimplificado(texto) {
   if (!texto || !texto.includes("/")) return null;
   let partes = texto.split("/");
-if (partes[0] === 'BOB') partes.shift();
+
+  // NOVO FORMATO: B1/id/item/versao/peso
+  if (partes[0] === 'B1' && partes.length >= 5) {
+    let idCurto = partes[1];
+    let item = partes[2];
+    let versao = partes[3];
+    let peso = parseFloat(partes[4]);
+    if (!item || !versao || isNaN(peso) || peso <= 0) return null;
+    return {
+      id: texto,
+      bobinaId: idCurto,
+      tipo: descobrirTipoPorItem(item),
+      item: item,
+      versao: versao,
+      peso: peso,
+      data: "",
+      dataBruta: ""
+    };
+  }
+
+  // FORMATO ANTIGO: BOB/item/versao/peso/data/hora/id ou item/versao/peso/data/hora/id
+  let temBOB = (partes[0] === 'BOB');
+  if (temBOB) partes.shift();
   if (partes.length < 3) return null;
+
   let item = partes[0], versao = partes[1];
   let peso = parseFloat(partes[2]);
   if (!item || !versao || isNaN(peso) || peso <= 0) return null;
 
-  let dataFormatada = "", dataBruta = "";
+  let dataFormatada = "", dataBruta = "", bobinaId = null;
+
+  // Extrair ID curto: sempre o último segmento se for hex de 8 chars
+  let ultimaParte = partes[partes.length - 1];
+  if (ultimaParte && ultimaParte.length === 8 && /^[a-f0-9]+$/i.test(ultimaParte)) {
+    bobinaId = ultimaParte.toLowerCase();
+  }
+
+  // Extrair data se existir (partes[3] = data 8 dígitos, partes[4] = hora 4-6 dígitos)
   if (partes.length >= 5) {
-    let d = partes[3], h = partes[4];
-    if (h.length === 4) h = h + "00";
-    if (d.length === 8 && h.length === 6) {
-      dataFormatada = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
-        ", " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+    let possData = partes[3];
+    let possHora = partes[4];
+    if (/^\d{8}$/.test(possData)) {
+      let d = possData;
+      let h = (possHora && /^\d{4,6}$/.test(possHora)) ? possHora.padEnd(6, '0') : "000000";
+      dataFormatada = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) + ", " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
       dataBruta = d + "/" + h;
     }
   }
 
-  let idUnico = texto;
-  if (partes.length >= 5 && partes[4].length === 4) {
-    idUnico = partes[0] + "/" + partes[1] + "/" + partes[2] + "/" + partes[3] + "/" + partes[4] + "00";
-  }
-
-  let bobinaId = null;
-  let ultimaParte = partes[partes.length - 1];
-  if (ultimaParte && ultimaParte.length === 8 && /^[a-f0-9]+$/i.test(ultimaParte)) {
-    bobinaId = ultimaParte;
-  }
-
   return {
-    id: idUnico,
+    id: texto,
     bobinaId: bobinaId,
     tipo: descobrirTipoPorItem(item),
-    item, versao, peso,
+    item: item,
+    versao: versao,
+    peso: peso,
     data: dataFormatada,
     dataBruta: dataBruta
   };
 }
 
 function localizarRegistroPorQR(dados) {
-  let qrLido = dados.item + "/" + dados.versao + "/" + Math.round(parseFloat(dados.peso));
-  if (dados.data) {
-    let partesData = dados.data.split(", ");
-    if (partesData.length === 2) {
-      let dma = partesData[0].split("/");
-      let hms = partesData[1].replace(/:/g, "");
-      if (dma.length === 3 && hms.length === 6) {
-        qrLido += "/" + dma[0] + dma[1] + dma[2] + "/" + hms;
-      }
-    }
+  // ID curto procurado (do campo bobinaId OU extraído do texto do QR)
+  let idCurtoProcurado = dados.bobinaId || extrairIdCurtoBobina(dados.id);
+
+  // Se o QR TEM id curto, ele é a fonte da verdade:
+  // achou bobina com mesmo id => retorna; não achou => NOVA (não usa fallback)
+  if (idCurtoProcurado) {
+    let encontrada = historico.find(function(h) {
+      if (!h || h.tipo !== "Entrada") return false;
+      return extrairIdCurtoBobina(h.id) === idCurtoProcurado;
+    });
+    return encontrada || null;
   }
 
-  return historico.find(h => {
+  // FALLBACK só para etiquetas ANTIGAS sem ID — busca por item/versao/peso
+  let candidatos = historico.filter(function(h) {
     if (!h || h.tipo !== "Entrada") return false;
-    if (!h.item || !h.item.includes(" - V")) return false;
-    if (dados.bobinaId && h.id && typeof h.id === 'string' && h.id.includes('-')) {
-      let idCurto = h.id.replace(/-/g, '').substring(0, 8);
-      if (idCurto === dados.bobinaId) return true;
-    }
     let partes = h.item.split(" - V");
-    let item = partes[0], versao = partes[1];
-    let qrDoHistorico = item + "/" + versao + "/" + Math.round(h.qtd);
-    if (h.data) {
-      let partesDataH = h.data.split(", ");
-      if (partesDataH.length === 2) {
-        let dmaH = partesDataH[0].split("/");
-        let hmsH = partesDataH[1].replace(/:/g, "");
-        if (dmaH.length === 3 && hmsH.length === 6) {
-          qrDoHistorico += "/" + dmaH[0] + dmaH[1] + dmaH[2] + "/" + hmsH;
-        }
-      }
-    }
-    if (qrLido === qrDoHistorico) return true;
-    let idHist = String(h.id || "");
-    let idDados = String(dados.id || "");
-    if (idDados && idHist === idDados) return true;
-    return false;
-  }) || null;
+    if (partes.length < 2) return false;
+    return String(partes[0]) === String(dados.item) &&
+      String(partes[1]) === String(dados.versao) &&
+      Math.round(Number(h.qtd)) === Math.round(Number(dados.peso));
+  });
+
+  if (dados.dataBruta && candidatos.length > 1) {
+    let dataNumQR = String(dados.dataBruta).replace(/[^0-9]/g, '');
+    let comData = candidatos.filter(function(h) {
+      let dataNumH = String(h.data || '').replace(/[^0-9]/g, '');
+      return dataNumH === dataNumQR;
+    });
+    if (comData.length > 0) return comData[0];
+  }
+
+  return candidatos[0] || null;
 }
 
 function mostrarResultadoQR(dados, registro) {
   qrLidoAtual = { dados, registro };
   let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
   let itemExiste = tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)];
-let medida = "-";
-if (itemExiste) {
-  medida = banco[tipo][dados.item][String(dados.versao)].tamanho || "-";
-}
+  let medida = "-";
+  if (itemExiste) medida = banco[tipo][dados.item][String(dados.versao)].tamanho || "-";
 
+  // Exibir data de produção do novo formato B1
   let etiquetaData = "-";
-  if (dados.id && dados.id.includes("/")) {
-    let partesId = dados.id.split("/");
-    if (partesId.length >= 5) {
-      let d = partesId[3], h = partesId[4];
-      if (h.length === 4) h = h + "00";
-      if (d.length === 8 && h.length === 6) {
-        etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
-          " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
-      }
+  if (dados.id && dados.id.startsWith('B1/')) {
+    // Novo formato não tem data embutida — busca no histórico se encontrado
+    if (registro && registro.data) {
+      etiquetaData = registro.data;
     }
-  }
-  if (etiquetaData === "-" && dados.dataBruta) {
+  } else if (dados.dataBruta) {
     let d = dados.dataBruta.split("/")[0];
-    let h = dados.dataBruta.split("/")[1];
-    if (h && h.length === 4) h = h + "00";
-    if (d && d.length === 8 && h && h.length === 6) {
-      etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
-        " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
+    let h = dados.dataBruta.split("/")[1] || '';
+    if (h.length === 4) h = h + "00";
+    if (d && d.length === 8 && h.length === 6) {
+      etiquetaData = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) + " às " + h.substring(0,2) + ":" + h.substring(2,4) + ":" + h.substring(4,6);
     }
   }
 
   let status = "", statusTipo = "";
   if (!itemExiste) {
-    status = `<div style="margin-top:8px; color:#dc2626;"><strong>❌ Erro:</strong> Item ou versão não cadastrado</div>
-              <div style="margin-top:4px; padding:6px 10px; background:#fee2e2; border-radius:6px; color:#991b1b; font-size:13px; font-weight:600;">
-                ⚠️ Cadastre este item em "Gerenciar cadastro" antes de movimentá-lo.
-              </div>`;
+    status = `<div style="margin-top:8px;color:#dc2626;"><strong>❌ Erro:</strong> Item ou versão não cadastrado</div>
+              <div style="margin-top:4px;padding:6px 10px;background:#fee2e2;border-radius:6px;color:#991b1b;font-size:13px;font-weight:600;">⚠️ Cadastre este item em "Gerenciar cadastro" antes de movimentá-lo.</div>`;
     statusTipo = "erro_cadastro";
   } else if (registro) {
     if (registro._removidaEstoque) {
-      status = `<div style="margin-top:8px; color:#dc2626;"><strong>🚫 Status:</strong> Bobina excluída</div>`;
+      status = `<div style="margin-top:8px;color:#dc2626;"><strong>🚫 Status:</strong> Bobina excluída</div>`;
       statusTipo = "excluida";
     } else if (registro.consumida) {
-      status = `<div style="margin-top:8px; color:#ca8a04;"><strong>⚠️ Status:</strong> Bobina consumida</div>`;
+      status = `<div style="margin-top:8px;color:#ca8a04;"><strong>⚠️ Status:</strong> Bobina consumida</div>`;
       statusTipo = "consumida";
     } else {
-      status = `<div style="margin-top:8px; color:#16a34a;"><strong>✅ Status:</strong> ativa no estoque</div>
-                <div style="margin-top:4px; padding:6px 10px; background:#fef3c7; border-radius:6px; color:#92400e; font-size:13px; font-weight:600;">
-                  ⚠️ Esta bobina já está no estoque — entrada duplicada não permitida
-                </div>`;
+      status = `<div style="margin-top:8px;color:#16a34a;"><strong>✅ Status:</strong> ativa no estoque</div>
+                <div style="margin-top:4px;padding:6px 10px;background:#fef3c7;border-radius:6px;color:#92400e;font-size:13px;font-weight:600;">⚠️ Esta bobina já está no estoque — entrada duplicada não permitida</div>`;
       statusTipo = "ativa";
     }
   } else {
-    status = `<div style="margin-top:8px; color:#3b82f6;"><strong>🆕 Status:</strong> bobina nova (não encontrada no histórico)</div>`;
+    status = `<div style="margin-top:8px;color:#3b82f6;"><strong>🆕 Status:</strong> bobina nova (não encontrada no histórico)</div>`;
     statusTipo = "nova";
   }
 
-    document.getElementById("resultadoQRConteudo").innerHTML = `
+  document.getElementById("resultadoQRConteudo").innerHTML = `
     <div><strong>Tipo:</strong> ${tipo ? nomeCompletoTipo(tipo) : '<span style="color:#dc2626">Desconhecido</span>'}</div>
     <div><strong>Item:</strong> ${dados.item || '-'}</div>
     <div><strong>Versão:</strong> ${dados.versao || '-'}</div>
@@ -2903,8 +3284,7 @@ function usarQRNaMovimentacao() {
   let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
   let item = dados.item, versao = String(dados.versao), peso = dados.peso;
   if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
-    mostrarToast("Item do QR não encontrado no cadastro", "erro");
-    return;
+    mostrarToast("Item do QR não encontrado no cadastro", "erro"); return;
   }
   tipoSelect.value = tipo;
   filtrarPorTipo();
@@ -2928,33 +3308,28 @@ function entradaRapidaQR() {
   let item = dados.item, versao = String(dados.versao);
   let peso = parseFloat(dados.peso);
   if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
-    mostrarToast("Item não encontrado no cadastro", "erro");
-    return;
+    mostrarToast("Item não encontrado no cadastro", "erro"); return;
   }
   if (!peso || peso <= 0) { mostrarToast("Peso inválido no QR", "erro"); return; }
   let registroExistente = localizarRegistroPorQR(dados);
   if (registroExistente) {
     let status = registroExistente._removidaEstoque ? "excluída" : registroExistente.consumida ? "consumida" : "ativa no estoque";
-    mostrarToast("Bobina já registrada (" + status + ")", "erro");
-    return;
+    mostrarToast("Bobina já registrada (" + status + ")", "erro"); return;
   }
   salvarEstadoParaDesfazer();
-  let identificador = item + " - V" + versao;
-  let dataEntrada = dados.data || new Date().toLocaleString();
-  let idSalvar = dados.id || crypto.randomUUID();
+let identificador = item + " - V" + versao;
+let idSalvar = dados.bobinaId || extrairIdCurtoBobina(dados.id) || crypto.randomUUID().replace(/-/g, '').substring(0, 8);
   estoque[identificador] = (estoque[identificador] || 0) + peso;
   estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
-// Se for opção "entrada", usa a data atual
-let dataFinal = (dados.data) ? dados.data : ((opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : dataEntrada);
-
-historico.push({ 
-  id: idSalvar, 
-  data: dataFinal, 
-  tipo: "Entrada", 
-  item: identificador, 
-  qtd: peso,
-  dataProducao: (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : undefined
-});
+  let dataFinal = (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : (dados.data || new Date().toLocaleString('pt-BR'));
+  historico.push({
+    id: idSalvar,
+    data: dataFinal,
+    tipo: "Entrada",
+    item: identificador,
+    qtd: peso,
+    dataProducao: (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : undefined
+  });
   ultimoItem = identificador;
   salvarDados();
   atualizarTudo();
@@ -3029,6 +3404,7 @@ let continuoContagem = 0;
 let continuoIdsLidos = [];
 
 async function abrirScannerContinuo() {
+  await fecharTodosScanners();
   continuoContagem = 0;
   continuoIdsLidos = [];
   continuoProcessando = false;
@@ -3036,49 +3412,29 @@ async function abrirScannerContinuo() {
   document.getElementById("continuoContador").textContent = "0 bobinas adicionadas";
   document.getElementById("continuoLog").innerHTML = "";
   document.getElementById("readerContinuo").innerHTML = "";
+  const readerContainer = document.getElementById("readerContinuo");
+  if (readerContainer) readerContainer.classList.add("camera-feedback");
+  let cooldown = false;
   try {
     leitorContinuo = new Html5Qrcode("readerContinuo");
-    const cameras = await Html5Qrcode.getCameras();
-    if (!cameras || cameras.length === 0) { mostrarToast("Nenhuma câmera encontrada", "erro"); fecharScannerContinuo(); return; }
     await leitorContinuo.start(
       { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 220, height: 220 } },
+      { fps: 22, qrbox: { width: 240, height: 240 } },
       async (decodedText) => {
-        if (continuoProcessando) return;
-        continuoProcessando = true;
-        try {
-          await processarLeituraContinua(decodedText);
-        } catch (erro) {
-          console.error("Erro no scanner contínuo:", erro);
-          adicionarLogContinuo("❌ " + new Date().toLocaleTimeString() + " — erro ao processar leitura", "erro");
-          if (navigator.vibrate) navigator.vibrate([200]);
-        } finally {
-          setTimeout(() => { continuoProcessando = false; }, 1500);
-        }
+        if (cooldown) return;
+        cooldown = true;
+        try { await processarLeituraContinua(decodedText); }
+        catch (e) { console.error(e); setCameraFeedback('erro'); }
+        setTimeout(() => { cooldown = false; }, 650);
       },
       () => {}
     );
     leitorContinuoAberto = true;
   } catch (erro) {
-    console.error(erro);
+    console.error("Erro ao abrir scanner contínuo:", erro);
     mostrarToast("Não foi possível abrir a câmera", "erro");
     fecharScannerContinuo();
   }
-}
-
-async function fecharScannerContinuo() {
-  try {
-    if (leitorContinuo && leitorContinuoAberto) {
-      await leitorContinuo.stop();
-      await leitorContinuo.clear();
-    }
-  } catch (e) { console.warn("Erro ao fechar scanner contínuo:", e); }
-  leitorContinuo = null;
-  leitorContinuoAberto = false;
-  continuoProcessando = false;
-  document.getElementById("modalScannerContinuo").classList.add("hidden");
-  document.getElementById("readerContinuo").innerHTML = "";
-  if (continuoContagem > 0) { atualizarTudo(); mostrarToast(continuoContagem + " bobina(s) adicionada(s)"); }
 }
 
 async function processarLeituraContinua(textoLido) {
@@ -3088,7 +3444,8 @@ async function processarLeituraContinua(textoLido) {
   catch (e) { dados = interpretarQRSimplificado(textoLido); }
   if (!dados) { adicionarLogContinuo("⚠️ " + agora + " — QR inválido", "erro"); return; }
 
-  let idQR = dados.bobinaId || dados.id || (dados.item + "/V" + dados.versao + "/" + dados.peso);
+  // Usa bobinaId (novo) ou id completo como chave de deduplicação
+  let idQR = dados.bobinaId || extrairIdCurtoBobina(dados.id) || (dados.item + "/V" + dados.versao + "/" + dados.peso);
   if (continuoIdsLidos.includes(idQR)) {
     adicionarLogContinuo("⏭️ " + agora + " — " + dados.item + " V" + dados.versao + " — já lido", "duplicado");
     if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
@@ -3101,13 +3458,11 @@ async function processarLeituraContinua(textoLido) {
 
   if (!tipo || !banco[tipo] || !banco[tipo][item] || !banco[tipo][item][versao]) {
     adicionarLogContinuo("❌ " + agora + " — " + item + " V" + versao + " — não cadastrado", "erro");
-    if (navigator.vibrate) navigator.vibrate([200]);
-    return;
+    if (navigator.vibrate) navigator.vibrate([200]); return;
   }
   if (!peso || peso <= 0) {
     adicionarLogContinuo("❌ " + agora + " — " + item + " V" + versao + " — peso inválido", "erro");
-    if (navigator.vibrate) navigator.vibrate([200]);
-    return;
+    if (navigator.vibrate) navigator.vibrate([200]); return;
   }
 
   let registro = localizarRegistroPorQR(dados);
@@ -3123,22 +3478,19 @@ async function processarLeituraContinua(textoLido) {
   let identificador = item + " - V" + versao;
   estoque[identificador] = (estoque[identificador] || 0) + peso;
   estoque[identificador + "_qtd"] = (estoque[identificador + "_qtd"] || 0) + 1;
-  let dataEntrada = dados.data || new Date().toLocaleString();
-  let idSalvar = dados.id || crypto.randomUUID();
-let dataFinal = (dados.data) ? dados.data : ((opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : dataEntrada);
-
-historico.push({ 
-  id: idSalvar, 
-  data: dataFinal, 
-  tipo: "Entrada", 
-  item: identificador, 
-  qtd: peso,
-  dataProducao: (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : undefined
-});
+  let idSalvar = dados.bobinaId || extrairIdCurtoBobina(dados.id) || crypto.randomUUID().replace(/-/g, '').substring(0, 8);
+  let dataFinal = (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : (dados.data || new Date().toLocaleString('pt-BR'));
+  historico.push({
+    id: idSalvar,
+    data: dataFinal,
+    tipo: "Entrada",
+    item: identificador,
+    qtd: peso,
+    dataProducao: (opcaoDataProducao === 'entrada') ? new Date().toLocaleString('pt-BR') : undefined
+  });
   ultimoItem = identificador;
-    salvarDados();
+  salvarDados();
 
-  // Remove da lista de pendentes ao dar entrada
   if (dados.bobinaId) removerPendentePorId(dados.bobinaId);
   if (idSalvar) removerPendentePorId(idSalvar);
 
@@ -3162,12 +3514,38 @@ function adicionarLogContinuo(texto, tipo) {
   else log.appendChild(div);
 }
 
+async function fecharScannerContinuo() {
+  try {
+    if (leitorContinuo) {
+      await leitorContinuo.stop().catch(() => {});
+      await leitorContinuo.clear().catch(() => {});
+    }
+  } catch (e) {
+    console.warn("Erro ao fechar scanner contínuo:", e);
+  }
+
+  leitorContinuo = null;
+  leitorContinuoAberto = false;
+  continuoProcessando = false;
+
+  let modal = document.getElementById("modalScannerContinuo");
+  if (modal) modal.classList.add("hidden");
+
+  let reader = document.getElementById("readerContinuo");
+  if (reader) reader.innerHTML = "";
+
+  if (continuoContagem > 0) {
+    atualizarTudo();
+    mostrarToast(continuoContagem + " bobina(s) adicionada(s)");
+  }
+}
+
 /* ================= EXPORTAR QR CODES ================= */
 
 function coletarBobinasParaQR(dataInicioP, dataFimP) {
   let bobinas = [];
   historico.forEach((h, index) => {
-    if (h.tipo !== "Entrada" || h._removidaEstoque) return;
+    if (h.tipo !== "Entrada" || h._removidaEstoque || h.consumida) return;
     if (dataInicioP || dataFimP) {
       let dataISO = h.data.split(",")[0].trim().split("/").reverse().join("-");
       if (dataInicioP && dataISO < dataInicioP) return;
@@ -3182,42 +3560,24 @@ function coletarBobinasParaQR(dataInicioP, dataFimP) {
     if (tipo && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
       tamanho = banco[tipo][item][versao].tamanho;
     }
-    let dataQR = "";
+
+    // NOVO FORMATO
+    let conteudoQR = formatarNovoQR(h.id, item, versao, h.qtd);
+
+    let dataProducao = "";
     if (h.data) {
       let partesData = h.data.split(", ");
       if (partesData.length === 2) {
         let dma = partesData[0].split("/");
-        let hms = partesData[1].replace(/:/g, "");
-        if (hms.length === 4) hms = hms + "00";
-        if (dma.length === 3 && hms.length === 6) {
-          dataQR = dma[0] + dma[1] + dma[2] + "/" + hms;
-        }
-      }
-    }
-    let idCurto = '';
-    if (h.id && typeof h.id === 'string' && h.id.includes('-')) {
-      idCurto = h.id.replace(/-/g, '').substring(0, 8);
-    }
-    let conteudoQR = item + "/" + versao + "/" + Math.round(h.qtd);
-    if (dataQR) conteudoQR += "/" + dataQR;
-    if (idCurto) conteudoQR += "/" + idCurto;
-
-    let dataProducao = "";
-    if (dataQR) {
-      let dParts = dataQR.split("/");
-      if (dParts.length === 2) {
-        let d = dParts[0], hr = dParts[1];
-        if (hr.length === 4) hr = hr + "00";
-        if (d.length === 8 && hr.length >= 4) {
-          dataProducao = d.substring(0,2) + "/" + d.substring(2,4) + "/" + d.substring(4,8) +
-            " " + hr.substring(0,2) + ":" + hr.substring(2,4) + ":" + hr.substring(4,6);
+        if (dma.length === 3) {
+          dataProducao = dma[0] + "/" + dma[1] + "/" + dma[2] + " " + partesData[1];
         }
       }
     }
 
     bobinas.push({
       index, id: conteudoQR, tipo, tipoNome: nomeCompletoTipo(tipo),
-      item, versao, tamanho, peso: Math.round(h.qtd),
+      item, versao, tamanho, medida: tamanho, peso: Math.round(h.qtd),
       data: h.data, dataProducao,
       status: h.consumida ? "consumida" : "ativa",
       qrData: conteudoQR
@@ -3229,17 +3589,16 @@ function coletarBobinasParaQR(dataInicioP, dataFimP) {
 async function exportarQRCodesZIP(dataInicioP, dataFimP) {
   let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
   if (bobinas.length === 0) { mostrarToast("Nenhuma bobina encontrada", "erro"); return; }
-
   let divModal = document.createElement('div');
   divModal.innerHTML = `
     <div class="modal-overlay" id="modalProgressoQR">
-      <div class="modal-content" style="text-align:center; max-width:350px;">
+      <div class="modal-content" style="text-align:center;max-width:350px;">
         <h3 style="margin-bottom:12px;">Gerando imagens QR</h3>
         <p id="progressoQRTexto">0 / ${bobinas.length}</p>
         <div class="barra" style="margin:12px 0;">
-          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a; width:0%;"></div>
+          <div class="barra-preenchimento" id="progressoQRBarra" style="background:#1e3a8a;width:0%;"></div>
         </div>
-        <p style="font-size:12px; color:#64748b;">Aguarde...</p>
+        <p style="font-size:12px;color:#64748b;">Aguarde...</p>
       </div>
     </div>
   `;
@@ -3316,61 +3675,31 @@ async function gerarImagensQRIndividuais(bobinas) {
   }
 }
 
-/* ================= EXPORTAÇÃO ZPL / CSV ZEBRA (ATUALIZADO 10x6) ================= */
+/* ================= ZPL / CSV ZEBRA ================= */
 
 function montarZPLDeLista(lista, qtdPorEtiqueta) {
-  // Define 8 como o novo padrão para a etiqueta 10x6 (4 colunas x 2 linhas)
-  if (!qtdPorEtiqueta) qtdPorEtiqueta = 8; 
-  
-  let larguraEtiqueta = 799;
-  let alturaEtiqueta = 480;
-  
-  let cols = 4;
-  let linhasGrid = 2; // Math.ceil(8 / 4)
-  let qrMag = 5;
-  let fontH = 20;
-  let fontW = 20;
-  
-  let cellW = 199; // Largura exata da coluna que você calculou
-  let cellH = 240; // Altura exata da linha
-
+  if (!qtdPorEtiqueta) qtdPorEtiqueta = 8;
+  let larguraEtiqueta = 799, alturaEtiqueta = 480;
+  let cols = 4, linhasGrid = 2, qrMag = 5, fontH = 20, fontW = 20;
+  let cellW = 199, cellH = 240;
   let zpl = '';
 
   for (let i = 0; i < lista.length; i += qtdPorEtiqueta) {
     zpl += '^XA\n^CI28\n^PW' + larguraEtiqueta + '\n^LL' + alturaEtiqueta + '\n';
-
-    // 1. Cria as linhas verticais contínuas (X = 199, 398, 597)
-    for (let c = 1; c < cols; c++) {
-      let x = c * cellW;
-      zpl += '^FO' + x + ',0^GB1,' + alturaEtiqueta + ',3^FS\n';
-    }
-    
-    // 2. Cria a linha horizontal contínua no meio (Y = 240)
-    for (let l = 1; l < linhasGrid; l++) {
-      let y = l * cellH;
-      zpl += '^FO0,' + y + '^GB' + larguraEtiqueta + ',1,3^FS\n';
-    }
-
-    // 3. Preenche as células com os QRs e Textos
+    for (let c = 1; c < cols; c++) { let x = c * cellW; zpl += '^FO' + x + ',0^GB1,' + alturaEtiqueta + ',3^FS\n'; }
+    for (let l = 1; l < linhasGrid; l++) { let y = l * cellH; zpl += '^FO0,' + y + '^GB' + larguraEtiqueta + ',1,3^FS\n'; }
     for (let j = 0; j < qtdPorEtiqueta; j++) {
       let bob = lista[i + j];
-      if (!bob) break; // Se acabarem os itens, para de desenhar
-
-      let col = j % cols;
-      let lin = Math.floor(j / cols);
-      
-      let cellX = col * cellW;
-      let cellY = lin * cellH;
-      
-      // Coordenadas exatas relativas à célula baseadas no seu ZPL
-      let qrX = cellX + 32;
-      let qrY = cellY + 18;
-      let textoY = cellY + 190;
-
-      // Código de Barras BQN (QR Code)
+      if (!bob) break;
+      let col = j % cols, lin = Math.floor(j / cols);
+      let cellX = col * cellW, cellY = lin * cellH;
+      let qrX = cellX + 32, qrY = cellY + 10;
+      let textoY = cellY + 165 + fontH;
       zpl += '^FO' + qrX + ',' + qrY + '^BQN,2,' + qrMag + '^FDLA,' + bob.qrData + '^FS\n';
-      // Texto Centralizado no final da célula
       zpl += '^FO' + cellX + ',' + textoY + '^A0N,' + fontH + ',' + fontW + '^FB' + cellW + ',1,0,C^FD' + bob.desc + '^FS\n';
+      if (bob.medida) {
+        zpl += '^FO' + cellX + ',' + (textoY + 22) + '^A0N,16,16^FB' + cellW + ',1,0,C^FD' + bob.medida + '^FS\n';
+      }
     }
     zpl += '^XZ\n\n';
   }
@@ -3381,14 +3710,13 @@ function exportarZPLZebra(dataInicioP, dataFimP, qtdPorEtiqueta) {
   if (!qtdPorEtiqueta) qtdPorEtiqueta = 8;
   let bobinas = coletarBobinasParaQR(dataInicioP, dataFimP);
   if (bobinas.length === 0) { mostrarToast("Nenhuma bobina encontrada no período", "erro"); return; }
-  let lista = bobinas.map(bob => ({ qrData: bob.qrData, desc: bob.item + "/" + bob.versao + " - " + bob.peso }));
+  let lista = bobinas.map(bob => ({ qrData: bob.qrData, desc: bob.item + "/" + bob.versao + " - " + bob.peso, medida: bob.medida || bob.tamanho || '' }));
   let zpl = montarZPLDeLista(lista, qtdPorEtiqueta);
   let blob = new Blob([zpl], { type: "application/octet-stream" });
   let link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = "Zebra_" + qtdPorEtiqueta + "QR_" + getTimestamp() + ".zpl";
   link.click();
-  let totalEtiquetas = Math.ceil(bobinas.length / qtdPorEtiqueta);
   mostrarToast(".zpl exportado com sucesso");
 }
 
@@ -3403,11 +3731,9 @@ function exportarCSVZebraMult(dataInicioP, dataFimP, qtdPorEtiqueta = 8) {
     for (let j = 0; j < qtdPorEtiqueta; j++) {
       let bob = bobinas[i + j];
       if (bob) {
-        let desc = bob.item + "/" + bob.versao + " - " + bob.peso + "kg";
+        let desc = bob.item + "/" + bob.versao + " - " + bob.peso + "kg - " + (bob.medida || bob.tamanho || '');
         linhaDados.push('"' + bob.qrData.replace(/"/g, '""') + '"', '"' + desc.replace(/"/g, '""') + '"');
-      } else {
-        linhaDados.push('""', '""');
-      }
+      } else { linhaDados.push('""', '""'); }
     }
     linhas.push(linhaDados.join(","));
   }
@@ -3429,11 +3755,9 @@ function selecionarTipoExport(card) {
   document.querySelectorAll('#exportGrid .export-card').forEach(c => c.classList.remove('selecionado'));
   card.classList.add('selecionado');
   exportTipoSelecionado = card.dataset.tipo;
-
   let formatosNormal = document.getElementById('exportFormatosNormal');
   let formatosQR = document.getElementById('exportFormatosQR');
   let etapaPeriodo = document.getElementById('exportEtapaPeriodo');
-
   if (exportTipoSelecionado === 'qrcodes') {
     formatosNormal.classList.add('hidden');
     formatosQR.classList.remove('hidden');
@@ -3447,9 +3771,15 @@ function selecionarTipoExport(card) {
     formatosNormal.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
     formatosNormal.querySelector('[data-formato="excel"]').classList.add('selecionado');
   }
-
-  if (exportTipoSelecionado === 'estoque') etapaPeriodo.classList.add('hidden');
-  else etapaPeriodo.classList.remove('hidden');
+  if (exportTipoSelecionado === 'estoque' || exportTipoSelecionado === 'conferencia') {
+    etapaPeriodo.classList.add('hidden');
+    exportUsarPeriodo = false;
+    let periodoDatas = document.getElementById('exportPeriodoDatas');
+    if (periodoDatas) periodoDatas.classList.add('hidden');
+    let toggles = document.querySelectorAll('.export-periodo-toggle button');
+    toggles.forEach(b => b.classList.remove('selecionado'));
+    if (toggles[0]) toggles[0].classList.add('selecionado');
+  } else etapaPeriodo.classList.remove('hidden');
 }
 
 function selecionarFormato(btn) {
@@ -3471,29 +3801,23 @@ function resetarMenuExportar() {
   exportTipoSelecionado = 'estoque';
   exportFormatoSelecionado = 'excel';
   exportUsarPeriodo = false;
-
   document.querySelectorAll('#exportGrid .export-card').forEach(c => c.classList.remove('selecionado'));
   let primeiro = document.querySelector('#exportGrid .export-card[data-tipo="estoque"]');
   if (primeiro) primeiro.classList.add('selecionado');
-
   let formatosNormal = document.getElementById('exportFormatosNormal');
   let formatosQR = document.getElementById('exportFormatosQR');
   if (formatosNormal) formatosNormal.classList.remove('hidden');
   if (formatosQR) formatosQR.classList.add('hidden');
-
   document.querySelectorAll('.export-formato-btn').forEach(b => b.classList.remove('selecionado'));
   let excelBtn = document.querySelector('#exportFormatosNormal [data-formato="excel"]');
   if (excelBtn) excelBtn.classList.add('selecionado');
-
   let etapaPeriodo = document.getElementById('exportEtapaPeriodo');
   let periodoDatas = document.getElementById('exportPeriodoDatas');
   if (etapaPeriodo) etapaPeriodo.classList.add('hidden');
   if (periodoDatas) periodoDatas.classList.add('hidden');
-
   let toggleBtns = document.querySelectorAll('.export-periodo-toggle button');
   toggleBtns.forEach(b => b.classList.remove('selecionado'));
   if (toggleBtns[0]) toggleBtns[0].classList.add('selecionado');
-
   let di = document.getElementById('exportDataInicio');
   let df = document.getElementById('exportDataFim');
   if (di) di.value = '';
@@ -3502,16 +3826,14 @@ function resetarMenuExportar() {
 
 function executarExportacaoNova() {
   let dataInicioExp = null, dataFimExp = null;
-  if (exportUsarPeriodo) {
+  if (exportUsarPeriodo && exportTipoSelecionado !== 'conferencia') {
     dataInicioExp = document.getElementById('exportDataInicio').value;
     dataFimExp = document.getElementById('exportDataFim').value;
     if (!dataInicioExp && !dataFimExp) { mostrarToast('Informe pelo menos uma data', 'erro'); return; }
   }
-
   if (exportTipoSelecionado === 'estoque') {
     if (!Object.keys(estoque).some(k => !k.endsWith('_qtd'))) { mostrarToast('Estoque vazio', 'erro'); return; }
   }
-
   if (exportTipoSelecionado === 'historico' || exportTipoSelecionado === 'ambos') {
     let dadosFiltrados = historico.filter(h => {
       if (!dataInicioExp && !dataFimExp) return true;
@@ -3520,23 +3842,23 @@ function executarExportacaoNova() {
     });
     if (dadosFiltrados.length === 0) { mostrarToast('Nenhum registro no período', 'erro'); return; }
   }
-
-  if (exportTipoSelecionado === 'qrcodes') {
-    let bobinas = coletarBobinasParaQR(dataInicioExp, dataFimExp);
-    if (bobinas.length === 0) { mostrarToast('Nenhuma bobina encontrada', 'erro'); return; }
-    if (exportFormatoSelecionado === 'zpl') {
-      abrirPreviewEtiqueta(dataInicioExp, dataFimExp);
-      fecharModalConfig();
-      return;
-    } else if (exportFormatoSelecionado === 'imagens') {
-      exportarQRCodesZIP(dataInicioExp, dataFimExp);
-    } else if (exportFormatoSelecionado === 'csv') {
-      exportarCSVZebraMult(dataInicioExp, dataFimExp, 8);
-    }
+  if (exportTipoSelecionado === 'conferencia') {
+    let dadosConf = obterConferenciaParaExport();
+    if (!dadosConf) { mostrarToast('Nenhuma conferência para exportar', 'erro'); return; }
+    let parcial = (dadosConf.ativa === true);
+    if (exportFormatoSelecionado === 'pdf') confExportarPDFConferencia(parcial, dadosConf);
+    else confExportarResultado(parcial, dadosConf);
     fecharModalConfig();
     return;
   }
-
+  if (exportTipoSelecionado === 'qrcodes') {
+    let bobinas = coletarBobinasParaQR(dataInicioExp, dataFimExp);
+    if (bobinas.length === 0) { mostrarToast('Nenhuma bobina encontrada', 'erro'); return; }
+    if (exportFormatoSelecionado === 'zpl') { abrirPreviewEtiqueta(dataInicioExp, dataFimExp); fecharModalConfig(); return; }
+    else if (exportFormatoSelecionado === 'imagens') { exportarQRCodesZIP(dataInicioExp, dataFimExp); }
+    else if (exportFormatoSelecionado === 'csv') { exportarCSVZebraMult(dataInicioExp, dataFimExp, 8); }
+    fecharModalConfig(); return;
+  }
   if (exportFormatoSelecionado === 'pdf') {
     if (exportTipoSelecionado === 'estoque') exportarEstoquePDF(dataInicioExp, dataFimExp);
     if (exportTipoSelecionado === 'historico') exportarHistoricoPDF(dataInicioExp, dataFimExp);
@@ -3553,9 +3875,7 @@ function executarExportacaoNova() {
 
 let previewDados = {
   bobinas: [], paginaAtual: 0, totalPaginas: 0,
-  qrPorEtiqueta: 8,
-  dataInicio: null, dataFim: null,
-  origem: null
+  qrPorEtiqueta: 8, dataInicio: null, dataFim: null, origem: null
 };
 
 function abrirPreviewEtiqueta(dataInicioP, dataFimP) {
@@ -3567,8 +3887,7 @@ function abrirPreviewEtiqueta(dataInicioP, dataFimP) {
   previewDados.dataInicio = dataInicioP;
   previewDados.dataFim = dataFimP;
   previewDados.origem = 'exportar';
-  document.getElementById('previewInfo').textContent =
-    '100 × 60 mm — ' + bobinas.length + ' bobina(s) em ' + previewDados.totalPaginas + ' etiqueta(s)';
+  document.getElementById('previewInfo').textContent = '100 × 60 mm — ' + bobinas.length + ' bobina(s) em ' + previewDados.totalPaginas + ' etiqueta(s)';
   document.getElementById('modalPreviewEtiqueta').classList.remove('hidden');
   gerarPreviewsQR(function() { desenharPreviewPagina(0); });
 }
@@ -3579,17 +3898,11 @@ function fecharPreviewEtiqueta() {
 }
 
 function previewPaginaAnterior() {
-  if (previewDados.paginaAtual > 0) {
-    previewDados.paginaAtual--;
-    desenharPreviewPagina(previewDados.paginaAtual);
-  }
+  if (previewDados.paginaAtual > 0) { previewDados.paginaAtual--; desenharPreviewPagina(previewDados.paginaAtual); }
 }
 
 function previewProximaPagina() {
-  if (previewDados.paginaAtual < previewDados.totalPaginas - 1) {
-    previewDados.paginaAtual++;
-    desenharPreviewPagina(previewDados.paginaAtual);
-  }
+  if (previewDados.paginaAtual < previewDados.totalPaginas - 1) { previewDados.paginaAtual++; desenharPreviewPagina(previewDados.paginaAtual); }
 }
 
 function gerarPreviewsQR(callback) {
@@ -3598,9 +3911,7 @@ function gerarPreviewsQR(callback) {
   document.body.appendChild(container);
   let pendentes = previewDados.bobinas.length;
   if (pendentes === 0) { container.remove(); if (callback) callback(); return; }
-
   let timeoutGlobal = setTimeout(() => { container.remove(); if (callback) callback(); }, 10000);
-
   previewDados.bobinas.forEach(function(bob, i) {
     let qrDiv = document.createElement('div');
     container.appendChild(qrDiv);
@@ -3628,11 +3939,7 @@ function gerarPreviewsQR(callback) {
         img.onerror = function() { bob._qrDataUrl = ''; pendentes--; if (pendentes <= 0) { clearTimeout(timeoutGlobal); container.remove(); if (callback) callback(); } };
         return;
       } else if (tentativas > 50) { bob._qrDataUrl = ''; resolvido = true; }
-      if (resolvido) {
-        clearInterval(verificar);
-        pendentes--;
-        if (pendentes <= 0) { clearTimeout(timeoutGlobal); container.remove(); if (callback) callback(); }
-      }
+      if (resolvido) { clearInterval(verificar); pendentes--; if (pendentes <= 0) { clearTimeout(timeoutGlobal); container.remove(); if (callback) callback(); } }
     }, 50);
   });
 }
@@ -3640,110 +3947,44 @@ function gerarPreviewsQR(callback) {
 function desenharPreviewPagina(pagina) {
   let canvas = document.getElementById('previewCanvas');
   let ctx = canvas.getContext('2d');
-
-  // Dimensões atualizadas para 10x6 cm (799x480 pontos a 203 DPI)
   let W = 799, H = 480;
   canvas.width = W; canvas.height = H;
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = '#cbd5e1';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(1, 1, W - 2, H - 2);
-
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 2; ctx.strokeRect(1, 1, W - 2, H - 2);
   let inicio = pagina * previewDados.qrPorEtiqueta;
-
-  // Grade fixa: 4 colunas x 2 linhas = 8 bobinas
-  let cols = 4;
-  let linhas = 2;
-  let cellW = 199; // exato como no ZPL
-  let cellH = 240;
-
-  // Linhas verticais (tracejadas no preview, sólidas no ZPL real)
-  ctx.setLineDash([6, 4]);
-  ctx.strokeStyle = '#94a3b8';
-  ctx.lineWidth = 1;
-  for (let c = 1; c < cols; c++) {
-    let x = c * cellW;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-
-  // Linha horizontal do meio
-  for (let l = 1; l < linhas; l++) {
-    let y = l * cellH;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-  }
+  let cols = 4, linhas = 2, cellW = 199, cellH = 240;
+  ctx.setLineDash([6, 4]); ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1;
+  for (let c = 1; c < cols; c++) { let x = c * cellW; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let l = 1; l < linhas; l++) { let y = l * cellH; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
   ctx.setLineDash([]);
-
-  // Tamanho do QR no preview (proporcional ao ZPL: mag=5)
-  let qrRealSize = (5 * 25) + (5 * 2); // = 135px
-  let fontH = 14; // tamanho de fonte no canvas do preview
-
+  let qrSize = 125;
   let imagensParaDesenhar = [];
-
   for (let j = 0; j < previewDados.qrPorEtiqueta; j++) {
     let bob = previewDados.bobinas[inicio + j];
     if (!bob) break;
-
-    let col = j % cols;
-    let lin = Math.floor(j / cols);
-    let cellX = col * cellW;
-    let cellY = lin * cellH;
-
-    // Mesmas coordenadas relativas do ZPL
-    let qrX = cellX + 32;
-    let qrY = cellY + 18;
-    let textoY = cellY + 190 + fontH; // +fontH pois fillText usa baseline
-
-    // Texto da bobina
+    let col = j % cols, lin = Math.floor(j / cols);
+    let cellX = col * cellW, cellY = lin * cellH;
+    let qrX = cellX + 32, qrY = cellY + 10;
+    let textoY1 = cellY + 185, textoY2 = textoY1 + 22;
     let desc = bob.item + '/' + (bob.versao || '') + ' - ' + bob.peso;
-    ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold ' + fontH + 'px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText(desc, cellX + cellW / 2, textoY);
-
-    // QR Code
-    if (bob._qrDataUrl) {
-      imagensParaDesenhar.push({
-        src: bob._qrDataUrl,
-        x: qrX, y: qrY,
-        size: qrRealSize
-      });
-    } else {
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(qrX, qrY, qrRealSize, qrRealSize);
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '12px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('QR', qrX + qrRealSize / 2, qrY + qrRealSize / 2 + 4);
+    ctx.fillStyle = '#1e293b'; ctx.font = 'bold 20px Arial'; ctx.textAlign = 'center';
+    ctx.fillText(desc, cellX + cellW / 2, textoY1);
+    if (bob.medida || bob.tamanho) { ctx.font = '16px Arial'; ctx.fillStyle = '#64748b'; ctx.fillText(bob.medida || bob.tamanho || '', cellX + cellW / 2, textoY2); }
+    if (bob._qrDataUrl) { imagensParaDesenhar.push({ src: bob._qrDataUrl, x: qrX, y: qrY, size: qrSize }); }
+    else {
+      ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1; ctx.strokeRect(qrX, qrY, qrSize, qrSize);
+      ctx.fillStyle = '#94a3b8'; ctx.font = '12px Arial'; ctx.textAlign = 'center';
+      ctx.fillText('QR', qrX + qrSize / 2, qrY + qrSize / 2 + 4);
     }
   }
-
-  // Rodapé informativo
-  ctx.fillStyle = '#cbd5e1';
-  ctx.font = '10px Arial';
-  ctx.textAlign = 'left';
-  ctx.fillText('100 x 60 mm', 6, H - 6);
-  ctx.textAlign = 'right';
-  ctx.fillText('203 DPI', W - 6, H - 6);
-  ctx.textAlign = 'left';
-
-  // Desenha os QR codes após carregar as imagens
+  ctx.fillStyle = '#cbd5e1'; ctx.font = '10px Arial'; ctx.textAlign = 'left';
+  ctx.fillText('100 x 60 mm', 6, H - 6); ctx.textAlign = 'right'; ctx.fillText('203 DPI', W - 6, H - 6); ctx.textAlign = 'left';
   let pendentes = imagensParaDesenhar.length;
   if (pendentes === 0) { atualizarNavPreview(); return; }
-
   imagensParaDesenhar.forEach(function(item) {
     let img = new Image();
-    img.onload = function() {
-      ctx.drawImage(img, item.x, item.y, item.size, item.size);
-      pendentes--;
-      if (pendentes <= 0) atualizarNavPreview();
-    };
-    img.onerror = function() {
-      pendentes--;
-      if (pendentes <= 0) atualizarNavPreview();
-    };
+    img.onload = function() { ctx.drawImage(img, item.x, item.y, item.size, item.size); pendentes--; if (pendentes <= 0) atualizarNavPreview(); };
+    img.onerror = function() { pendentes--; if (pendentes <= 0) atualizarNavPreview(); };
     img.src = item.src;
   });
 }
@@ -3756,19 +3997,13 @@ function atualizarNavPreview() {
 }
 
 function confirmarExportZPL() {
-  if (geradorBobinas.length > 0) {
-    fecharPreviewEtiqueta();
-    geradorGerarZPL();
-    return;
-  }
-
-  let veioDosPendentes = !document.getElementById('modalPendentes').classList.contains('hidden');
-
-  if (veioDosPendentes && etiquetasPendentes.length > 0) {
+  if (geradorBobinas.length > 0) { fecharPreviewEtiqueta(); geradorGerarZPL(); return; }
+  if (previewDados.origem === 'pendentes' && etiquetasPendentes.length > 0) {
     fecharPreviewEtiqueta();
     let lista = etiquetasPendentes.map(p => ({
-      qrData: 'BOB/' + p.item + '/' + p.versao + '/' + Math.round(p.peso) + '/' + p.idCurto,
-      desc: p.item + '/' + p.versao + ' - ' + p.peso
+      qrData: formatarNovoQR(p.id || p.idCurto, p.item, p.versao, p.peso),
+      desc: p.item + '/' + p.versao + ' - ' + p.peso,
+      medida: p.tamanho || ''
     }));
     if (lista.length === 0) { mostrarToast('Nenhuma bobina para exportar', 'erro'); return; }
     let zpl = montarZPLDeLista(lista, previewDados.qrPorEtiqueta || 8);
@@ -3777,12 +4012,10 @@ function confirmarExportZPL() {
     link.href = URL.createObjectURL(blob);
     link.download = 'Etiquetas_Pendentes_' + getTimestamp() + '.zpl';
     link.click();
-  mostrarToast('.zpl exportado');
+    mostrarToast('.zpl exportado');
     return;
   }
-
-  let di = previewDados.dataInicio;
-  let df = previewDados.dataFim;
+  let di = previewDados.dataInicio, df = previewDados.dataFim;
   fecharPreviewEtiqueta();
   exportarZPLZebra(di, df);
 }
@@ -3798,9 +4031,7 @@ function fecharGerador() { document.getElementById('modalGerador').classList.add
 function abrirGerador() {
   fecharModalConfig();
   if (geradorBobinas.length === 0 && etiquetasPendentes.length > 0) {
-    if (confirm('Você tem ' + etiquetasPendentes.length + ' etiqueta(s) pendente(s).\n\nDeseja verificar?')) {
-      abrirPendentes(); return;
-    }
+    if (confirm('Você tem ' + etiquetasPendentes.length + ' etiqueta(s) pendente(s).\n\nDeseja verificar?')) { abrirPendentes(); return; }
   }
   document.getElementById('modalGerador').classList.remove('hidden');
   geradorIrPasso(1);
@@ -3815,61 +4046,39 @@ function geradorConcluir() {
   if (geradorBobinas.length === 0) { mostrarToast('Nenhuma bobina para salvar', 'erro'); return; }
   adicionarPendentes(geradorBobinas);
   let total = geradorBobinas.reduce((acc, b) => acc + b.qtd, 0);
-  
   document.getElementById('geradorBotoesAntes').classList.add('hidden');
   document.getElementById('geradorBotoesDepois').classList.remove('hidden');
-  
   let resumo = document.getElementById('geradorExportTotal');
   if (resumo) resumo.textContent = '✅ ' + total + ' etiqueta(s) salva(s)!';
-  
   if (navigator.vibrate) navigator.vibrate([100]);
   mostrarToast(total + ' etiqueta(s) salva(s) como pendentes');
 }
 
 function geradorCancelar() {
   let concluiu = !document.getElementById('geradorBotoesDepois').classList.contains('hidden');
-
-  if (concluiu) {
-    geradorResetarTudo();
-    document.getElementById('modalGerador').classList.add('hidden');
-    return;
-  }
-
+  if (concluiu) { geradorResetarTudo(); document.getElementById('modalGerador').classList.add('hidden'); return; }
   if (geradorBobinas.length > 0) {
     if (!confirm('Descartar ' + geradorBobinas.reduce((a, b) => a + b.qtd, 0) + ' etiqueta(s)?')) return;
   }
-
   geradorResetarTudo();
   document.getElementById('modalGerador').classList.add('hidden');
   mostrarToast('Etiquetas descartadas');
 }
 
-function geradorFecharFinal() {
-  geradorResetarTudo();
-  document.getElementById('modalGerador').classList.add('hidden');
-}
+function geradorFecharFinal() { geradorResetarTudo(); document.getElementById('modalGerador').classList.add('hidden'); }
 
 function geradorFecharSimples() {
   let concluiu = !document.getElementById('geradorBotoesDepois').classList.contains('hidden');
-
-  if (concluiu) {
-    geradorResetarTudo();
-    document.getElementById('modalGerador').classList.add('hidden');
-    return;
-  }
-
+  if (concluiu) { geradorResetarTudo(); document.getElementById('modalGerador').classList.add('hidden'); return; }
   if (geradorBobinas.length > 0) {
     if (!confirm('Descartar ' + geradorBobinas.reduce((a, b) => a + b.qtd, 0) + ' etiqueta(s)?')) return;
   }
-
   geradorResetarTudo();
   document.getElementById('modalGerador').classList.add('hidden');
 }
 
 function geradorResetarTudo() {
-  geradorBobinas = [];
-  geradorEditandoIndex = null;
-  geradorGrupoAberto = null;
+  geradorBobinas = []; geradorEditandoIndex = null; geradorGrupoAberto = null;
   geradorLimparCampos();
   let busca = document.getElementById('geradorBusca');
   if (busca) busca.value = '';
@@ -3926,9 +4135,7 @@ function geradorSelecionouVersao() {
   let item = itemEl ? itemEl.value : '';
   let versao = versaoEl.value;
   let tamanho = '';
-  if (tipo && item && versao && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) {
-    tamanho = banco[tipo][item][versao].tamanho;
-  }
+  if (tipo && item && versao && banco[tipo] && banco[tipo][item] && banco[tipo][item][versao]) tamanho = banco[tipo][item][versao].tamanho;
   if (buscaEl && item) buscaEl.value = item + ' - V' + versao + ' (' + tamanho + ')';
   if (pesoEl) pesoEl.focus();
 }
@@ -4041,8 +4248,8 @@ function geradorAdicionar() {
     geradorEditandoIndex = null;
     mostrarToast('Bobina atualizada');
   } else {
-let dataProducao = obterDataProducaoParaEtiqueta();
-geradorBobinas.push({ tipo, item, versao, tamanho, peso, qtd, ids: geradorGerarIds(qtd), dataProducao: dataProducao });
+    let dataProducao = obterDataProducaoParaEtiqueta();
+    geradorBobinas.push({ tipo, item, versao, tamanho, peso, qtd, ids: geradorGerarIds(qtd), dataProducao });
     mostrarToast('Adicionada');
   }
   geradorLimparCampos();
@@ -4139,9 +4346,7 @@ function geradorEditarBobina(chaveGrupo, bobinaIndex) {
   if (grupoAlvo.ids.length === 0) geradorBobinas.splice(grupoIndex, 1);
   let grupoDestino = geradorBobinas.find(bob => bob.tipo === tipo && bob.item === item && bob.versao === versao && bob.peso === novoPeso);
   if (grupoDestino) { grupoDestino.ids.push(idMantido); grupoDestino.qtd++; }
-  else {
-    geradorBobinas.splice(Math.min(grupoIndex, geradorBobinas.length), 0, { tipo, item, versao, tamanho: tamanhoSalvo, peso: novoPeso, qtd: 1, ids: [idMantido] });
-  }
+  else { geradorBobinas.splice(Math.min(grupoIndex, geradorBobinas.length), 0, { tipo, item, versao, tamanho: tamanhoSalvo, peso: novoPeso, qtd: 1, ids: [idMantido] }); }
   geradorAtualizarResumoTotal();
   geradorGrupoAberto = chaveGrupo;
   geradorRenderizarLista1();
@@ -4170,7 +4375,7 @@ function geradorRenderizarLista(containerId, comAcoes) {
   if (!container) return;
   container.innerHTML = '';
   if (geradorBobinas.length === 0) {
-    container.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:13px; padding:12px;">Nenhuma bobina adicionada</div>';
+    container.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:13px;padding:12px;">Nenhuma bobina adicionada</div>';
     return;
   }
   let grupos = {};
@@ -4209,21 +4414,16 @@ function geradorRenderizarLista(containerId, comAcoes) {
     });
 
     card.innerHTML = `
-      <div class="gerador-card-header" onclick="geradorToggleCard(this)" style="display:flex; align-items:center; justify-content:space-between; gap:6px; padding:8px 10px;">
-        
-        <!-- LADO ESQUERDO: Fica tudo em uma linha e corta com '...' se não couber -->
-        <div style="display:flex; align-items:center; gap:6px; overflow:hidden; white-space:nowrap; flex:1;">
-          <span class="gerador-card-tipo ${classTipo}" style="margin:0; flex-shrink:0;">${nomeTipo}</span>
-          <span style="font-size:13px; font-weight:600; text-overflow:ellipsis; overflow:hidden;">${grupo.item} / V${grupo.versao} · ${grupo.tamanho}</span>
+      <div class="gerador-card-header" onclick="geradorToggleCard(this)" style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;">
+        <div style="display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;flex:1;">
+          <span class="gerador-card-tipo ${classTipo}" style="margin:0;flex-shrink:0;">${nomeTipo}</span>
+          <span style="font-size:13px;font-weight:600;text-overflow:ellipsis;overflow:hidden;">${grupo.item} / V${grupo.versao} · ${grupo.tamanho}</span>
         </div>
-
-        <!-- LADO DIREITO: Total, Qtd e Seta -->
-        <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
-           <strong style="font-size:13px;">Total: ${formatarPeso(pesoTotal)} kg</strong>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <strong style="font-size:13px;">Total: ${formatarPeso(pesoTotal)} kg</strong>
           <span class="gerador-card-qtd" style="margin:0;">${qtdBobinas} bob.</span>
           <span class="gerador-card-seta" style="margin:0;">▶</span>
         </div>
-
       </div>
       <div class="gerador-card-body">${bobinasHTML}</div>
     `;
@@ -4247,27 +4447,16 @@ function geradorAtualizarResumoTotal() {
   if (elExport) elExport.textContent = total + ' etiqueta(s) pronta(s)';
 }
 
+// CORRIGIDO: geradorMontarZPL estava com erro de sintaxe
 function geradorMontarZPL() {
   let todas = [];
   geradorBobinas.forEach(bob => {
     bob.ids.forEach(id => {
-      let idCurto = id.replace(/-/g, '').substring(0, 8);
-let dataQR = '';
-if (bob.dataProducao) {
-  let partesData = bob.dataProducao.split(", ");
-  if (partesData.length === 2) {
-    let dma = partesData[0].split("/");
-    let hms = partesData[1].replace(/:/g, "");
-    if (dma.length === 3 && hms.length >= 4) {
-      dataQR = "/" + dma[0] + dma[1] + dma[2] + "/" + hms;
-    }
-  }
-}
-
-todas.push({ 
-  qrData: 'BOB/' + bob.item + '/' + bob.versao + '/' + Math.round(bob.peso) + dataQR + '/' + idCurto, 
-  desc: bob.item + '/' + bob.versao + ' - ' + bob.peso 
-});
+      todas.push({
+        qrData: formatarNovoQR(id, bob.item, bob.versao, bob.peso),
+        desc: bob.item + '/' + bob.versao + ' - ' + bob.peso,
+        medida: bob.tamanho || ''
+      });
     });
   });
   return montarZPLDeLista(todas, 8);
@@ -4309,8 +4498,10 @@ function geradorVisualizarZPL() {
   let todas = [];
   geradorBobinas.forEach(bob => {
     bob.ids.forEach(id => {
-      let idCurto = id.replace(/-/g, '').substring(0, 8);
-      todas.push({ qrData: bob.item + '/' + bob.versao + '/' + Math.round(bob.peso) + '/' + idCurto, item: bob.item, versao: bob.versao, peso: bob.peso });
+      todas.push({
+        qrData: formatarNovoQR(id, bob.item, bob.versao, bob.peso),
+        item: bob.item, versao: bob.versao, peso: bob.peso, medida: bob.tamanho || ''
+      });
     });
   });
   if (todas.length === 0) { mostrarToast('Nenhuma etiqueta para visualizar', 'erro'); return; }
@@ -4334,27 +4525,26 @@ function carregarPendentes() {
 function salvarPendentes() {
   localStorage.setItem('etiquetasPendentes', JSON.stringify(etiquetasPendentes));
   atualizarBotaoPendentesConfig();
+  // ❌ Removido: sincronização automática
 }
 
 function atualizarBotaoPendentesConfig() {
   let contador = document.getElementById('btnPendentesContador');
   if (!contador) return;
-  if (etiquetasPendentes.length === 0) {
-    contador.style.display = 'none';
-  } else {
-    contador.textContent = '(Pendentes: ' + etiquetasPendentes.length + ')';
-    contador.style.display = 'inline';
-  }
+  if (etiquetasPendentes.length === 0) { contador.style.display = 'none'; }
+  else { contador.textContent = '(Pendentes: ' + etiquetasPendentes.length + ')'; contador.style.display = 'inline'; }
 }
 
 function adicionarPendentes(bobinas) {
   bobinas.forEach(bob => {
     bob.ids.forEach(id => {
       etiquetasPendentes.push({
-        id, idCurto: id.replace(/-/g, '').substring(0, 8),
+        id,
+        idCurto: id.replace(/-/g, '').substring(0, 8),
         tipo: bob.tipo, item: bob.item, versao: bob.versao,
         tamanho: bob.tamanho, peso: bob.peso,
-        dataCriacao: new Date().toLocaleString()
+        dataCriacao: new Date().toLocaleString(),
+        dataProducao: bob.dataProducao || null
       });
     });
   });
@@ -4364,12 +4554,11 @@ function adicionarPendentes(bobinas) {
 function removerPendentePorId(bobinaId) {
   if (!bobinaId) return;
   let idStr = String(bobinaId);
-  let idCurto = idStr.includes('-') ? idStr.replace(/-/g, '').substring(0, 8) : (idStr.length === 8 ? idStr : idStr.replace(/-/g, '').substring(0, 8));
+  let idCurto = extrairIdCurtoBobina(idStr) || idStr.replace(/-/g, '').substring(0, 8);
   let tamanhoAntes = etiquetasPendentes.length;
   etiquetasPendentes = etiquetasPendentes.filter(p => {
     if (p.idCurto === idCurto) return false;
     if (p.id === idStr) return false;
-    if (idStr.replace(/-/g, '').startsWith(p.idCurto)) return false;
     return true;
   });
   if (etiquetasPendentes.length < tamanhoAntes) salvarPendentes();
@@ -4383,17 +4572,7 @@ function removerPendentePorIndex(index) {
   salvarPendentes();
   renderizarPendentes();
   if (etiquetasPendentes.length === 0) { fecharPendentes(); mostrarToast('Todas as pendentes foram removidas'); }
-  else {
-    mostrarToast('Pendente removida');
-    if (chaveGrupo) {
-      document.querySelectorAll('#pendentesLista .gerador-card').forEach(card => {
-        let resumo = card.querySelector('.gerador-card-resumo');
-        if (!resumo) return;
-        let partesCh = chaveGrupo.split('|');
-        if (resumo.textContent.includes(partesCh[1] + ' / V' + partesCh[2])) card.classList.add('aberto');
-      });
-    }
-  }
+  else { mostrarToast('Pendente removida'); }
 }
 
 function abrirPendentes() {
@@ -4407,127 +4586,81 @@ function fecharPendentes() { document.getElementById('modalPendentes').classList
 function renderizarPendentes() {
   let container = document.getElementById('pendentesLista');
   let totalEl = document.getElementById('pendentesTotal');
-
   if (!container) return;
-
   container.innerHTML = '';
-
-  if (totalEl) {
-    totalEl.textContent = etiquetasPendentes.length + ' pendente(s)';
-  }
-
+  if (totalEl) totalEl.textContent = etiquetasPendentes.length + ' pendente(s)';
   if (!Array.isArray(etiquetasPendentes) || etiquetasPendentes.length === 0) {
-    container.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:13px; padding:12px;">Nenhuma etiqueta pendente</div>';
+    container.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:13px;padding:12px;">Nenhuma etiqueta pendente</div>';
     return;
   }
 
   let grupos = {};
-
   etiquetasPendentes.forEach((p, idx) => {
     if (!p) return;
-
     let chave = (p.tipo || '') + '|' + (p.item || '') + '|' + (p.versao || '');
-
-    if (!grupos[chave]) {
-      grupos[chave] = {
-        tipo: p.tipo || '',
-        item: p.item || '',
-        versao: p.versao || '',
-        tamanho: p.tamanho || '',
-        pendentes: []
-      };
-    }
-
-    grupos[chave].pendentes.push({
-      ...p,
-      indexReal: idx
-    });
+    if (!grupos[chave]) grupos[chave] = { tipo: p.tipo || '', item: p.item || '', versao: p.versao || '', tamanho: p.tamanho || '', pendentes: [] };
+    grupos[chave].pendentes.push({ ...p, indexReal: idx });
   });
 
   let html = '';
-
   Object.keys(grupos).forEach(chave => {
     let grupo = grupos[chave];
     let pesoTotal = grupo.pendentes.reduce((acc, p) => acc + (Number(p.peso) || 0), 0);
     let qtd = grupo.pendentes.length;
-
     let bobinasHTML = '';
-
     grupo.pendentes.forEach((p, bIdx) => {
       bobinasHTML += `
-        <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid #f1f5f9;">
-          <span style="font-size:12px;">
-            <strong>Bobina ${bIdx + 1}:</strong> ${p.peso} kg
-            <span style="font-size:10px; color:#94a3b8; margin-left:4px;">${p.dataCriacao || ''}</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f1f5f9;">
+          <span style="font-size:12px;"><strong>Bobina ${bIdx + 1}:</strong> ${p.peso} kg
+            <span style="font-size:10px;color:#94a3b8;margin-left:4px;">${p.dataCriacao || ''}</span>
           </span>
-          <button class="btn-excluir-opcao" style="width:auto; padding:2px 8px; font-size:11px; height:26px; min-width:0;" onclick="event.stopPropagation(); removerPendentePorIndex(${p.indexReal})">🗑</button>
+          <button class="btn-excluir-opcao" style="width:auto;padding:2px 8px;font-size:11px;height:26px;min-width:0;" onclick="event.stopPropagation(); removerPendentePorIndex(${p.indexReal})">🗑</button>
         </div>
       `;
     });
-
     html += `
       <div class="gerador-card">
         <div class="gerador-card-header" onclick="geradorToggleCard(this)">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; width:100%;">
-            <div style="display:flex; align-items:center; gap:6px; overflow:hidden; white-space:nowrap; flex:1;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;">
+            <div style="display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;flex:1;">
               <span class="gerador-card-tipo tipo-${grupo.tipo}">${nomeBonitoTipo(grupo.tipo)}</span>
-              <span style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis;">
-                ${grupo.item} / V${grupo.versao} · ${grupo.tamanho}
-              </span>
+              <span style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;">${grupo.item} / V${grupo.versao} · ${grupo.tamanho}</span>
             </div>
-            <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
               <strong style="font-size:13px;">Total: ${formatarPeso(pesoTotal)} kg</strong>
               <span class="gerador-card-qtd">${qtd} bob.</span>
               <span class="gerador-card-seta">▶</span>
             </div>
           </div>
         </div>
-
         <div class="gerador-card-body">
           <div><strong>Tipo:</strong> ${nomeCompletoTipo(grupo.tipo)}</div>
           <div><strong>Item:</strong> ${grupo.item}</div>
           <div><strong>Versão:</strong> ${grupo.versao} (${grupo.tamanho})</div>
-          <div style="margin-top:6px; font-weight:600; font-size:12px; color:#1e3a8a;">Bobinas:</div>
+          <div style="margin-top:6px;font-weight:600;font-size:12px;color:#1e3a8a;">Bobinas:</div>
           ${bobinasHTML}
         </div>
       </div>
     `;
   });
-
   container.innerHTML = html;
 }
 
 function pendentesMontarZPL() {
   let lista = etiquetasPendentes.map(p => ({
-    qrData: 'BOB/' + p.item + '/' + p.versao + '/' + Math.round(p.peso) + '/' + p.idCurto,
-    desc: p.item + '/' + p.versao + ' - ' + p.peso
+    qrData: formatarNovoQR(p.id || p.idCurto, p.item, p.versao, p.peso),
+    desc: p.item + '/' + p.versao + ' - ' + p.peso,
+    medida: p.tamanho || ''
   }));
   return montarZPLDeLista(lista, 8);
 }
 
 function pendentesVisualizarZPL() {
   if (etiquetasPendentes.length === 0) { mostrarToast('Nenhuma pendente', 'erro'); return; }
-  
-  let todas = etiquetasPendentes.map(p => {
-    let dataQR = '';
-    if (p.dataProducao) {
-      let partesData = p.dataProducao.split(", ");
-      if (partesData.length === 2) {
-        let dma = partesData[0].split("/");
-        let hms = partesData[1].replace(/:/g, "");
-        if (dma.length === 3 && hms.length >= 4) {
-          dataQR = "/" + dma[0] + dma[1] + dma[2] + "/" + hms;
-        }
-      }
-    }
-    return {
-      qrData: p.item + '/' + p.versao + '/' + Math.round(p.peso) + dataQR + '/' + p.idCurto,
-      item: p.item,
-      versao: p.versao,
-      peso: p.peso
-    };
-  });
-
+  let todas = etiquetasPendentes.map(p => ({
+    qrData: formatarNovoQR(p.id || p.idCurto, p.item, p.versao, p.peso),
+    item: p.item, versao: p.versao, peso: p.peso, medida: p.tamanho || ''
+  }));
   previewDados.bobinas = todas;
   previewDados.paginaAtual = 0;
   previewDados.totalPaginas = Math.ceil(todas.length / 8);
@@ -4541,10 +4674,8 @@ function pendentesCopiarZPL() {
   if (etiquetasPendentes.length === 0) { mostrarToast('Nenhuma pendente', 'erro'); return; }
   let zpl = pendentesMontarZPL();
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(zpl).then(() => {
-      mostrarToast('ZPL das pendentes copiado');
-      if (navigator.vibrate) navigator.vibrate([50]);
-    }).catch(() => { geradorCopiarFallback(zpl); });
+    navigator.clipboard.writeText(zpl).then(() => { mostrarToast('ZPL das pendentes copiado'); if (navigator.vibrate) navigator.vibrate([50]); })
+    .catch(() => { geradorCopiarFallback(zpl); });
   } else { geradorCopiarFallback(zpl); }
 }
 
@@ -4559,38 +4690,22 @@ function pendentesLimparTudo() {
 
 function copiarZPLDoPreview() {
   let zpl = '';
-
-  // Veio do gerador
-  if (geradorBobinas.length > 0) {
-    zpl = geradorMontarZPL();
-  }
-  // Veio das pendentes
-  else if (!document.getElementById('modalPendentes').classList.contains('hidden') && etiquetasPendentes.length > 0) {
-    zpl = pendentesMontarZPL();
-  }
-  // Veio do menu exportar
+  if (geradorBobinas.length > 0) { zpl = geradorMontarZPL(); }
+  else if (previewDados.origem === 'pendentes' && etiquetasPendentes.length > 0) { zpl = pendentesMontarZPL(); }
   else {
     let bobinas = coletarBobinasParaQR(previewDados.dataInicio, previewDados.dataFim);
-    let lista = bobinas.map(bob => ({ qrData: bob.qrData, desc: bob.item + '/' + bob.versao + ' - ' + bob.peso }));
+    let lista = bobinas.map(bob => ({ qrData: bob.qrData, desc: bob.item + '/' + bob.versao + ' - ' + bob.peso, medida: bob.medida || bob.tamanho || '' }));
     zpl = montarZPLDeLista(lista, previewDados.qrPorEtiqueta || 8);
   }
-
   if (!zpl) { mostrarToast('Nenhum ZPL para copiar', 'erro'); return; }
-
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(zpl).then(() => {
-      mostrarToast('ZPL copiado para a área de transferência');
-      if (navigator.vibrate) navigator.vibrate([50]);
-    }).catch(() => { geradorCopiarFallback(zpl); });
-  } else {
-    geradorCopiarFallback(zpl);
-  }
+    navigator.clipboard.writeText(zpl).then(() => { mostrarToast('ZPL copiado para a área de transferência'); if (navigator.vibrate) navigator.vibrate([50]); })
+    .catch(() => { geradorCopiarFallback(zpl); });
+  } else { geradorCopiarFallback(zpl); }
 }
 
 function geradorLimparEFechar() {
-  if (geradorBobinas.length > 0) {
-    if (!confirm('Descartar as etiquetas geradas?')) return;
-  }
+  if (geradorBobinas.length > 0) { if (!confirm('Descartar as etiquetas geradas?')) return; }
   geradorResetarTudo();
   document.getElementById('modalGerador').classList.add('hidden');
   mostrarToast('Etiquetas descartadas');
@@ -4599,21 +4714,13 @@ function geradorLimparEFechar() {
 function geradorExportarDoPreview() { fecharPreviewEtiqueta(); geradorGerarZPL(); }
 
 /* ================= CONFIGURAÇÃO DE DATA DE PRODUÇÃO ================= */
-// Opções disponíveis:
-//   'geracao'  → usa a data/hora do momento em que clica "Concluir" no gerador
-//   'entrada'  → usa a data/hora do momento em que escaneia para dar entrada no estoque
-//   'manual'   → o usuário escolhe a data/hora manualmente no campo do gerador
-// Para remover/editar: busque por "CONFIGURAÇÃO DE DATA DE PRODUÇÃO"
 
 let opcaoDataProducao = localStorage.getItem('opcaoDataProducao') || 'geracao';
 
 function abrirConfigDataProducao() {
   fecharModalConfig();
-  
   let modal = document.getElementById('modalConfigDataProducao');
   modal.classList.remove('hidden');
-
-  // Marca a opção salva corretamente
   modal.querySelectorAll('input[name="opcaoData"]').forEach(function(radio) {
     radio.checked = (radio.value === opcaoDataProducao);
   });
@@ -4638,13 +4745,10 @@ function nomeOpcaoData(opcao) {
 }
 
 function atualizarCampoDataManualGerador() {
-  // Mostra ou esconde o campo de data manual no gerador
   let container = document.getElementById('geradorDataManualContainer');
   if (!container) return;
-
   if (opcaoDataProducao === 'manual') {
     container.classList.remove('hidden');
-    // Define valor padrão como agora
     let input = document.getElementById('geradorDataManual');
     if (input && !input.value) {
       let agora = new Date();
@@ -4657,24 +4761,791 @@ function atualizarCampoDataManualGerador() {
 }
 
 function obterDataProducaoParaEtiqueta() {
-  // Retorna a data formatada para gravar na etiqueta/QR
-  // Chamada quando uma bobina é adicionada no gerador
-
-  if (opcaoDataProducao === 'geracao') {
-    return new Date().toLocaleString('pt-BR');
-  }
-
+  if (opcaoDataProducao === 'geracao') return new Date().toLocaleString('pt-BR');
   if (opcaoDataProducao === 'manual') {
     let input = document.getElementById('geradorDataManual');
-    if (input && input.value) {
-      return new Date(input.value).toLocaleString('pt-BR');
-    }
+    if (input && input.value) return new Date(input.value).toLocaleString('pt-BR');
     return new Date().toLocaleString('pt-BR');
   }
-
-  // Para 'entrada', retorna null (será definida na hora da entrada)
   return null;
 }
+
+/* ================= AUXILIARES CONFERÊNCIA ================= */
+
+function extrairIdCurtoBobina(valor) {
+  if (!valor) return '';
+  let str = String(valor).trim().toLowerCase();
+
+  // Novo formato B1/id/...
+  if (str.startsWith('b1/')) {
+    let partes = str.split('/');
+    if (partes.length >= 2 && partes[1].length === 8 && /^[a-f0-9]{8}$/.test(partes[1])) return partes[1];
+  }
+
+  // Formato antigo BOB/item/versao/peso/.../id
+  let semPrefixo = str.replace(/^bob\//i, '');
+  let partes = semPrefixo.split('/');
+  let ultima = partes[partes.length - 1] || '';
+  if (/^[a-f0-9]{8}$/i.test(ultima)) return ultima.toLowerCase();
+
+  // UUID completo
+  if (/^[a-f0-9-]{32,36}$/i.test(str)) return str.replace(/-/g, '').substring(0, 8).toLowerCase();
+
+  // ID curto isolado
+  if (/^[a-f0-9]{8}$/i.test(str)) return str.toLowerCase();
+
+  return '';
+}
+
+/* ================= CONFERÊNCIA DE INVENTÁRIO ================= */
+
+let conferencia = {
+  ativa: false, tipo: 'tudo', dataInicio: null,
+  fotoEstoque: [], conferidas: [], extras: [],
+  scannerAberto: false, leitor: null, continuoMode: false
+};
+
+function abrirConferencia() {
+  fecharModalConfig();
+  let salva = localStorage.getItem('conferencia');
+  if (salva) {
+    try {
+      let dados = JSON.parse(salva);
+      if (dados.ativa) {
+        if (confirm('Existe uma conferência em andamento.\n\nContinuar?')) {
+          conferencia = dados;
+          mostrarTelaConf('confTelaAndamento');
+          confRenderizarLista();
+          document.getElementById('modalConferencia').classList.remove('hidden');
+          return;
+        } else { localStorage.removeItem('conferencia'); }
+      }
+    } catch (e) {}
+  }
+  conferencia = { ativa: false, tipo: 'tudo', dataInicio: null, fotoEstoque: [], conferidas: [], extras: [], scannerAberto: false, leitor: null, continuoMode: false };
+  mostrarTelaConf('confTelaIniciar');
+  document.getElementById('modalConferencia').classList.remove('hidden');
+}
+
+function fecharConferencia() {
+  if (conferencia.ativa) {
+    if (!confirm('Deseja realmente fechar a conferência em andamento?')) return;
+  }
+  // Se tinha dados salvos (modo 2), limpa do Firebase
+  if (modoConferencia === 2 && nomeUsuarioConferencia) {
+    try {
+      db.collection('conferencias').doc(nomeUsuarioConferencia.toLowerCase()).delete();
+      db.collection('conferencias').get().then(snap => {
+        snap.forEach(doc => { if (doc.id.startsWith('_merged_')) doc.ref.delete(); });
+      }).catch(() => {});
+    } catch(e) {}
+  }
+confJaFinalizada = false;
+  limparConfListener();
+  if (confUserNamesListener) { clearInterval(confUserNamesListener); confUserNamesListener = null; }
+  if (confResultadoListener) { clearInterval(confResultadoListener); confResultadoListener = null; }
+  localStorage.removeItem('conferencia');
+  document.getElementById('modalConferencia').classList.add('hidden');
+  if (conferencia.leitor) {
+    try { conferencia.leitor.stop(); conferencia.leitor.clear(); } catch (e) {}
+    conferencia.leitor = null;
+  }
+}
+
+function mostrarTelaConf(telaId) {
+  ['confTelaIniciar', 'confTelaAndamento', 'confTelaResultado'].forEach(id => {
+    let el = document.getElementById(id);
+    if (el) { el.classList.add('hidden'); el.style.display = 'none'; }
+  });
+  let tela = document.getElementById(telaId);
+  if (tela) {
+    tela.classList.remove('hidden');
+    tela.style.display = 'flex';
+    tela.style.flexDirection = 'column';
+    tela.style.flex = '1';
+    tela.style.minHeight = '0';
+  }
+}
+
+function iniciarConferencia() {
+  let tipoSelecionado = document.querySelector('input[name="confTipo"]:checked').value;
+  let foto = [];
+  historico.forEach(h => {
+    if (h.tipo !== 'Entrada' || h._removidaEstoque || h.consumida) return;
+    let partes = h.item.split(' - V');
+    if (partes.length < 2) return;
+    let item = partes[0], versao = partes[1];
+    let tipoItem = '';
+    Object.keys(banco).forEach(t => { if (banco[t] && banco[t][item]) tipoItem = t; });
+    if (tipoSelecionado !== 'tudo' && tipoItem !== tipoSelecionado) return;
+    if (!estoque[h.item] || estoque[h.item] <= 0) return;
+    let tamanho = '';
+    if (banco[tipoItem] && banco[tipoItem][item] && banco[tipoItem][item][versao]) tamanho = banco[tipoItem][item][versao].tamanho;
+
+    // USA A FUNÇÃO CORRETA
+    let idCurto = extrairIdCurtoBobina(h.id);
+
+    foto.push({ id: h.id, idCurto, item, versao, identificador: h.item, tipo: tipoItem, peso: h.qtd, tamanho, data: h.data });
+  });
+
+  if (foto.length === 0) { mostrarToast('Nenhuma bobina no estoque para conferir', 'erro'); return; }
+  conferencia.ativa = true;
+  conferencia.tipo = tipoSelecionado;
+  conferencia.dataInicio = new Date().toLocaleString('pt-BR');
+  conferencia.fotoEstoque = foto;
+  conferencia.conferidas = [];
+  conferencia.extras = [];
+  confSalvar();
+  mostrarTelaConf('confTelaAndamento');
+  confRenderizarLista();
+  iniciarMonitoramentoUsuarios();
+  mostrarToast('Conferência iniciada — ' + foto.length + ' bobina(s)');
+}
+
+function confSalvar() {
+  let dados = { ativa: conferencia.ativa, tipo: conferencia.tipo, dataInicio: conferencia.dataInicio, fotoEstoque: conferencia.fotoEstoque, conferidas: conferencia.conferidas, extras: conferencia.extras };
+  localStorage.setItem('conferencia', JSON.stringify(dados));
+confSalvarFirebase();
+}
+
+function pausarConferencia() { confSalvar(); fecharConferencia(); mostrarToast('Conferência pausada'); }
+
+function confRenderizarLista() {
+  let container = document.getElementById('confLista');
+  if (!container) return;
+  let termo = '';
+  let buscaEl = document.getElementById('confBusca');
+  if (buscaEl) termo = normalizarTexto(buscaEl.value);
+
+  let totalBobinas = conferencia.fotoEstoque.length;
+  let totalConferidas = conferencia.conferidas.length;
+  let percentual = totalBobinas > 0 ? Math.round((totalConferidas / totalBobinas) * 100) : 0;
+
+  let progEl = document.getElementById('confProgresso');
+  if (progEl) progEl.textContent = totalConferidas + '/' + totalBobinas + ' (' + percentual + '%)';
+  let barraEl = document.getElementById('confBarra');
+  if (barraEl) barraEl.style.width = percentual + '%';
+
+  let html = '';
+
+  if ((dados.extras || []).length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#ca8a04;padding:4px 0;">⚠️ Extras (' + conferencia.extras.length + ')</div>';
+    conferencia.extras.forEach((extra, idx) => {
+      let textoBusca = normalizarTexto(extra.item + ' ' + extra.versao + ' ' + extra.peso);
+      if (termo && !textoBusca.includes(termo)) return;
+      html += `<div style="display:flex;align-items:center;padding:8px;background:#fefce8;border:1px solid #fde68a;border-radius:8px;gap:8px;">
+        <span style="font-size:16px;">⚠️</span>
+        <div style="flex:1;"><div style="font-size:13px;font-weight:600;">${extra.item} — V${extra.versao}</div><div style="font-size:11px;color:#64748b;">${extra.peso} kg · ${extra.tamanho || ''}</div></div>
+        <button class="btn-clear" style="width:28px;height:28px;font-size:12px;" onclick="confRemoverExtra(${idx})">X</button>
+      </div>`;
+    });
+  }
+
+  let conferidas = conferencia.fotoEstoque.filter(b => conferencia.conferidas.includes(b.id));
+  if (conferidas.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#16a34a;padding:4px 0;">✅ Conferidas (' + conferidas.length + ')</div>';
+    conferidas.forEach(bob => {
+      let textoBusca = normalizarTexto(bob.item + ' ' + bob.versao + ' ' + bob.peso + ' ' + bob.tamanho);
+      if (termo && !textoBusca.includes(termo)) return;
+      html += `<div style="display:flex;align-items:center;padding:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;gap:8px;">
+        <span style="font-size:16px;">✅</span>
+        <div style="flex:1;"><div style="font-size:13px;font-weight:600;">${bob.item} — V${bob.versao}</div><div style="font-size:11px;color:#64748b;">${Math.round(bob.peso)} kg · ${bob.tamanho}</div></div>
+        <button style="background:#dc2626;color:white;border:none;border-radius:6px;width:28px;height:28px;font-size:12px;cursor:pointer;" onclick="confDesmarcar('${bob.id}')">↩</button>
+      </div>`;
+    });
+  }
+
+  let pendentes = conferencia.fotoEstoque.filter(b => !conferencia.conferidas.includes(b.id));
+  if (pendentes.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#64748b;padding:4px 0;">⬜ Pendentes (' + pendentes.length + ')</div>';
+    pendentes.forEach(bob => {
+      let textoBusca = normalizarTexto(bob.item + ' ' + bob.versao + ' ' + bob.peso + ' ' + bob.tamanho);
+      if (termo && !textoBusca.includes(termo)) return;
+      html += `<div style="display:flex;align-items:center;padding:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;gap:8px;cursor:pointer;" onclick="confMarcarManual('${bob.id}')">
+        <span style="font-size:16px;">⬜</span>
+        <div style="flex:1;"><div style="font-size:13px;font-weight:600;">${bob.item} — V${bob.versao}</div><div style="font-size:11px;color:#64748b;">${Math.round(bob.peso)} kg · ${bob.tamanho}</div></div>
+      </div>`;
+    });
+  }
+
+  if (!html) html = '<div style="text-align:center;color:#94a3b8;padding:20px;">Nenhuma bobina encontrada</div>';
+  container.innerHTML = html;
+}
+
+function confFiltrarLista() { confRenderizarLista(); }
+
+function confMarcarManual(id) {
+  if (conferencia.conferidas.includes(id)) { mostrarToast('Já conferida', 'erro'); return; }
+  conferencia.conferidas.push(id);
+  confSalvar(); confRenderizarLista();
+  if (navigator.vibrate) navigator.vibrate([50]);
+}
+
+function confDesmarcar(id) {
+  conferencia.conferidas = conferencia.conferidas.filter(c => c !== id);
+  confSalvar(); confRenderizarLista();
+}
+
+function confRemoverExtra(idx) {
+  conferencia.extras.splice(idx, 1);
+  confSalvar(); confRenderizarLista();
+}
+
+/* ================= CONFERÊNCIA — PROCESSAR LEITURA (CORRIGIDO) ================= */
+
+function confProcessarLeitura(textoLido) {
+  let texto = String(textoLido || '').trim();
+  if (!texto) return 'erro';
+
+  let dados = null;
+  try { dados = JSON.parse(texto); } catch (e) { dados = interpretarQRSimplificado(texto); }
+
+  let idCurtoLido = '';
+  if (dados && dados.bobinaId) {
+    idCurtoLido = dados.bobinaId;
+  }
+  if (!idCurtoLido) {
+    idCurtoLido = extrairIdCurtoBobina(texto);
+  }
+
+  // BUSCA SOMENTE POR ID ÚNICO — sem fallback
+  if (idCurtoLido) {
+    let encontrada = conferencia.fotoEstoque.find(function(bob) {
+      let idCurtoBob = extrairIdCurtoBobina(bob.id);
+      return idCurtoBob === idCurtoLido;
+    }) || null;
+
+    if (encontrada) {
+      if (conferencia.conferidas.includes(encontrada.id)) return 'duplicada';
+      conferencia.conferidas.push(encontrada.id);
+      confSalvar(); confRenderizarLista();
+      return 'conferida';
+    }
+  }
+
+  // Não encontrou por ID — tenta como extra se tiver dados válidos
+  if (dados && dados.item && dados.versao) {
+    let tipo = dados.tipo || descobrirTipoPorItem(dados.item);
+    let tamanho = (tipo && banco[tipo] && banco[tipo][dados.item] && banco[tipo][dados.item][String(dados.versao)])
+      ? banco[tipo][dados.item][String(dados.versao)].tamanho : '';
+    conferencia.extras.push({ item: dados.item, versao: String(dados.versao), peso: dados.peso || 0, tamanho, tipo });
+    confSalvar(); confRenderizarLista();
+    return 'extra';
+  }
+
+  return 'erro';
+}
+
+let confScanCooldown = false;
+
+async function confScannerQR() {
+  conferencia.coletorMode = false;
+  conferencia.continuoMode = false;
+  document.getElementById('confScannerTitulo').textContent = 'Escanear para conferência';
+  document.getElementById('confScannerStatus').textContent = conferencia.conferidas.length + ' conferida(s)';
+  document.getElementById('confScannerLog').innerHTML = '';
+  
+  let readerConf = document.getElementById('readerConf');
+  if (readerConf) {
+    readerConf.style.display = 'block';
+    readerConf.innerHTML = '';
+  }
+  let collectorInput = document.getElementById('collectorInput');
+  if (collectorInput) collectorInput.style.display = 'none';
+  let statusLine = document.getElementById('confScannerStatus');
+  if (statusLine) statusLine.classList.remove('hidden');
+
+  document.getElementById('modalScannerConf').classList.remove('hidden');
+  try {
+    await fecharTodosScanners();
+    conferencia.leitor = new Html5Qrcode('readerConf');
+    await conferencia.leitor.start(
+      { facingMode: 'environment' },
+      { fps: 5, qrbox: { width: 240, height: 240 } },
+      async (decodedText) => {
+        if (confScanCooldown) return;
+        confScanCooldown = true;
+        setTimeout(() => { confScanCooldown = false; }, 800);
+        let resultado = await confProcessarLeitura(decodedText);
+        confLogScanner(resultado, decodedText);
+        document.getElementById('confScannerStatus').textContent = conferencia.conferidas.length + ' conferida(s)';
+      },
+      () => {}
+    );
+  } catch (e) {
+    console.error('Erro scanner conferência:', e);
+    mostrarToast('Não foi possível abrir a câmera', 'erro');
+    confFecharScanner();
+  }
+}
+
+async function confAbrirColetor() {
+  conferencia.coletorMode = true;
+  await fecharTodosScanners();
+  document.getElementById('confScannerTitulo').textContent = 'Coletor de Dados';
+  let statusText = conferencia.conferidas.length + ' conferida(s)';
+  let statusLine = document.getElementById('confScannerStatus');
+  if (statusLine) statusLine.textContent = statusText;
+  document.getElementById('confScannerLog').innerHTML = '';
+  coletorBuffer = '';
+  
+  let readerConf = document.getElementById('readerConf');
+  if (readerConf) readerConf.style.display = 'none';
+  let collectorInput = document.getElementById('collectorInput');
+  if (collectorInput) {
+    collectorInput.style.display = 'block';
+    collectorInput.value = '';
+    // Foco sem teclado
+    collectorInput.readOnly = true;
+    collectorInput.focus({ preventScroll: true });
+    collectorInput.blur();
+    collectorInput.focus({ preventScroll: true });
+    setTimeout(() => { collectorInput.readOnly = false; }, 100);
+  }
+
+  document.getElementById('modalScannerConf').classList.remove('hidden');
+
+  iniciarMonitoramentoColetor();
+
+  setTimeout(() => {
+    let inp = document.getElementById('collectorInput');
+    if (inp) {
+      inp.value = '';
+      inp.readOnly = true;
+      inp.focus({ preventScroll: true });
+      inp.blur();
+      inp.focus({ preventScroll: true });
+      setTimeout(() => { inp.readOnly = false; }, 100);
+    }
+  }, 100);
+}
+
+function confLogScanner(resultado, texto) {
+  let log = document.getElementById('confScannerLog');
+  let agora = new Date().toLocaleTimeString();
+  let div = document.createElement('div');
+  div.style.padding = '4px 0';
+  div.style.borderBottom = '1px solid #f1f5f9';
+  let dados = null;
+  try { dados = JSON.parse(texto); } catch (e) { dados = interpretarQRSimplificado(texto); }
+  let nome = dados ? (dados.item + ' V' + dados.versao) : texto;
+
+  if (resultado === 'conferida') {
+    div.style.color = '#16a34a';
+    div.textContent = '✅ ' + agora + ' — ' + nome + ' conferida';
+    if (navigator.vibrate) navigator.vibrate([80]);
+  } else if (resultado === 'duplicada') {
+    div.style.color = '#ca8a04';
+    div.textContent = '⏭️ ' + agora + ' — ' + nome + ' já conferida';
+    if (navigator.vibrate) navigator.vibrate([60, 40, 60, 40, 60]);
+  } else if (resultado === 'extra') {
+    div.style.color = '#ea580c';
+    div.textContent = '⚠️ ' + agora + ' — ' + nome + ' extra (não no estoque)';
+    if (navigator.vibrate) navigator.vibrate([300, 100, 300]);
+  } else {
+    div.style.color = '#dc2626';
+    div.textContent = '❌ ' + agora + ' — Não encontrado / Lida: "' + texto + '"';
+    if (navigator.vibrate) navigator.vibrate([500]);
+  }
+  if (log.firstChild) log.insertBefore(div, log.firstChild);
+  else log.appendChild(div);
+
+  let statusLine = document.getElementById('confScannerStatus');
+  if (statusLine) statusLine.textContent = conferencia.conferidas.length + ' conferida(s)';
+}
+
+async function confFecharScanner() {
+  try { if (conferencia.leitor) { await conferencia.leitor.stop(); await conferencia.leitor.clear(); } } catch (e) {}
+  conferencia.leitor = null;
+  conferencia.coletorMode = false;
+  if (coletorInterval) { clearInterval(coletorInterval); coletorInterval = null; }
+  if (collectorFocusTimer) { clearInterval(collectorFocusTimer); collectorFocusTimer = null; }
+  coletorBuffer = '';
+  document.getElementById('modalScannerConf').classList.add('hidden');
+  let readerConf = document.getElementById('readerConf');
+  if (readerConf) {
+    readerConf.innerHTML = '';
+    readerConf.style.display = 'block';
+  }
+  let collectorInput = document.getElementById('collectorInput');
+  if (collectorInput) collectorInput.style.display = 'none';
+
+  confRenderizarLista();
+}
+
+function finalizarConferencia() {
+  let pendentes = conferencia.fotoEstoque.filter(b => !conferencia.conferidas.includes(b.id));
+  let conferidas = conferencia.fotoEstoque.filter(b => conferencia.conferidas.includes(b.id));
+  if (conferidas.length === 0) { mostrarToast('Nenhuma bobina foi conferida ainda', 'erro'); return; }
+  if (pendentes.length > 0) {
+    if (!confirm('⚠️ Ainda há ' + pendentes.length + ' bobina(s) não conferida(s).\n\nFinalizar mesmo assim?\n(Dá pra continuar depois pelo botão "▶️ Continuar")')) return;
+  }
+  conferencia.ativa = false;
+  confSalvar();
+  document.getElementById('confResConferidas').textContent = conferidas.length;
+  document.getElementById('confResNaoEncontradas').textContent = pendentes.length;
+  document.getElementById('confResExtras').textContent = conferencia.extras.length;
+  let html = '';
+  if (conferidas.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#16a34a;padding:4px 0;">✅ Conferidas (' + conferidas.length + ')</div>';
+    conferidas.forEach(bob => { html += `<div style="padding:6px 8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;">✅ ${bob.item} — V${bob.versao} · ${Math.round(bob.peso)} kg · ${bob.tamanho}</div>`; });
+  }
+  if (pendentes.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#dc2626;padding:4px 0;">❌ Não encontradas (' + pendentes.length + ')</div>';
+    pendentes.forEach(bob => { html += `<div style="padding:6px 8px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:12px;">❌ ${bob.item} — V${bob.versao} · ${Math.round(bob.peso)} kg · ${bob.tamanho}</div>`; });
+  }
+  if (conferencia.extras.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#ca8a04;padding:4px 0;">⚠️ Extras (' + conferencia.extras.length + ')</div>';
+    conferencia.extras.forEach(extra => { html += `<div style="padding:6px 8px;background:#fefce8;border:1px solid #fde68a;border-radius:6px;font-size:12px;">⚠️ ${extra.item} — V${extra.versao} · ${Math.round(extra.peso)} kg · ${extra.tamanho || ''}</div>`; });
+  }
+  document.getElementById('confListaResultado').innerHTML = html;
+  mostrarTelaConf('confTelaResultado');
+
+  // Se modo 2, só mostra o botão Continuar sem listener
+  // (quem continuar vai em modo solo)
+}
+
+/* ================= FINALIZAR CONFERÊNCIA SEM CONFIRMAR (para auto-merge) ================= */
+
+function finalizarConferenciaSilenciosa() {
+  let conferidas = conferencia.fotoEstoque.filter(b => conferencia.conferidas.includes(b.id));
+  let pendentes = conferencia.fotoEstoque.filter(b => !conferencia.conferidas.includes(b.id));
+  if (conferidas.length === 0) return;
+  conferencia.ativa = false;
+  confSalvar();
+  document.getElementById('confResConferidas').textContent = conferidas.length;
+  document.getElementById('confResNaoEncontradas').textContent = pendentes.length;
+  document.getElementById('confResExtras').textContent = conferencia.extras.length;
+  let html = '';
+  if (conferidas.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#16a34a;padding:4px 0;">✅ Conferidas (' + conferidas.length + ')</div>';
+    conferidas.forEach(bob => { html += '<div style="padding:6px 8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;">✅ ' + bob.item + ' — V' + bob.versao + ' · ' + Math.round(bob.peso) + ' kg · ' + bob.tamanho + '</div>'; });
+  }
+  if (pendentes.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#dc2626;padding:4px 0;">❌ Não encontradas (' + pendentes.length + ')</div>';
+    pendentes.forEach(bob => { html += '<div style="padding:6px 8px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:12px;">❌ ' + bob.item + ' — V' + bob.versao + ' · ' + Math.round(bob.peso) + ' kg · ' + bob.tamanho + '</div>'; });
+  }
+  if (conferencia.extras.length > 0) {
+    html += '<div style="font-size:12px;font-weight:700;color:#ca8a04;padding:4px 0;">⚠️ Extras (' + conferencia.extras.length + ')</div>';
+    conferencia.extras.forEach(extra => { html += '<div style="padding:6px 8px;background:#fefce8;border:1px solid #fde68a;border-radius:6px;font-size:12px;">⚠️ ' + extra.item + ' — V' + extra.versao + ' · ' + Math.round(extra.peso) + ' kg · ' + (extra.tamanho || '') + '</div>'; });
+  }
+  document.getElementById('confListaResultado').innerHTML = html;
+  mostrarTelaConf('confTelaResultado');
+}
+
+/* ================= CONTINUAR CONFERÊNCIA ================= */
+
+let confListenerVar = null;
+let confResultadoListener = null;
+
+function limparConfListener() {
+  if (confListenerVar) {
+    if (typeof confListenerVar === 'number') {
+      clearInterval(confListenerVar);
+    } else {
+      try { confListenerVar(); } catch(e) {}
+    }
+    confListenerVar = null;
+  }
+  // Também limpa monitoramento de usuários
+  if (confUserNamesListener) {
+    clearInterval(confUserNamesListener);
+    confUserNamesListener = null;
+  }
+  // Limpa lista de usuários na tela
+  let container = document.getElementById('confUsuariosContainer');
+  if (container) { container.style.display = 'none'; container.innerHTML = ''; }
+}
+
+function continuarConferencia() {
+  if (conferencia.fotoEstoque.length === 0) {
+    mostrarToast('Nenhuma conferência para continuar', 'erro');
+    return;
+  }
+  conferencia.ativa = true;
+  confJaFinalizada = false;
+  
+  // Só limpa listeners locais, NÃO mexe nos docs do Firebase
+  limparConfListener();
+  if (confResultadoListener) { clearInterval(confResultadoListener); confResultadoListener = null; }
+  if (confUserNamesListener) { clearInterval(confUserNamesListener); confUserNamesListener = null; }
+  
+  // Modo SOLO — sem esperar o outro
+  modoConferencia = 1;
+  
+  confSalvar();
+  mostrarTelaConf('confTelaAndamento');
+  confRenderizarLista();
+  if (navigator.vibrate) navigator.vibrate([50]);
+  mostrarToast('▶️ Continuando solo — ' + conferencia.conferidas.length + ' já conferida(s)');
+}
+
+/* ================= CONTINUAR CONFERÊNCIA ================= */
+
+function confAjustarEstoque() {
+  let pendentes = conferencia.fotoEstoque.filter(b => !conferencia.conferidas.includes(b.id));
+  if (pendentes.length === 0 && conferencia.extras.length === 0) { mostrarToast('Nada para ajustar', 'erro'); return; }
+  let msg = '🔧 Ajustar estoque:\n\n';
+  if (pendentes.length > 0) msg += '❌ Remover ' + pendentes.length + ' bobina(s) não encontrada(s)\n';
+  if (conferencia.extras.length > 0) msg += '⚠️ Adicionar ' + conferencia.extras.length + ' bobina(s) extra(s)\n';
+  msg += '\nDeseja continuar?';
+  if (!confirm(msg)) return;
+  salvarEstadoParaDesfazer();
+  pendentes.forEach(bob => {
+    let reg = historico.find(h => h.id === bob.id);
+    if (reg) {
+      reg._removidaEstoque = true;
+      historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Exclusão', item: bob.identificador, qtd: bob.peso, refEntradaId: bob.id, refEntradaData: bob.data });
+      if (estoque[bob.identificador]) {
+        estoque[bob.identificador] -= bob.peso;
+        if (estoque[bob.identificador + '_qtd'] > 0) estoque[bob.identificador + '_qtd']--;
+        if (estoque[bob.identificador] <= 0) { delete estoque[bob.identificador]; delete estoque[bob.identificador + '_qtd']; }
+      }
+    }
+  });
+  conferencia.extras.forEach(extra => {
+    let identificador = extra.item + ' - V' + extra.versao;
+    estoque[identificador] = (estoque[identificador] || 0) + extra.peso;
+    estoque[identificador + '_qtd'] = (estoque[identificador + '_qtd'] || 0) + 1;
+    historico.push({ id: crypto.randomUUID(), data: new Date().toLocaleString(), tipo: 'Entrada', item: identificador, qtd: extra.peso });
+  });
+  salvarDados(); atualizarTudo();
+  localStorage.removeItem('conferencia');
+  fecharConferencia();
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  mostrarToast('Estoque ajustado pela conferência');
+}
+
+function confExportarResultado(parcial, dados) {
+  parcial = (parcial === true);
+  dados = dados || conferencia;
+  let conferidas = dados.fotoEstoque.filter(b => dados.conferidas.includes(b.id));
+  let pendentes = dados.fotoEstoque.filter(b => !dados.conferidas.includes(b.id));
+  const wb = XLSX.utils.book_new();
+  let linhas = [];
+  linhas.push([parcial ? 'CONFERÊNCIA DE INVENTÁRIO (PARCIAL — EM ANDAMENTO)' : 'CONFERÊNCIA DE INVENTÁRIO', '', '', '', '']);
+  linhas.push(['Data início:', dados.dataInicio, '', '', '']);
+  linhas.push(['Data fim:', parcial ? 'em andamento' : new Date().toLocaleString('pt-BR'), '', '', '']);
+  if (parcial) linhas.push(['Exportado em:', new Date().toLocaleString('pt-BR'), '', '', '']);
+  linhas.push(['Tipo:', dados.tipo === 'tudo' ? 'Todos' : nomeCompletoTipo(dados.tipo), '', '', '']);
+  linhas.push(['', '', '', '', '']);
+  linhas.push(['RESUMO', '', '', '', '']);
+  linhas.push(['Conferidas:', conferidas.length, '', '', '']);
+  linhas.push(['Não encontradas:', pendentes.length, '', '', '']);
+  linhas.push(['Extras:', (dados.extras || []).length, '', '', '']);
+  linhas.push(['', '', '', '', '']);
+  if (conferidas.length > 0) {
+    linhas.push(['CONFERIDAS', '', '', '', '']);
+    linhas.push(['Item', 'Versão', 'Medidas', 'Kg', 'Status']);
+    conferidas.forEach(b => linhas.push([b.item, b.versao, b.tamanho, Math.round(b.peso), 'Conferida']));
+    linhas.push(['', '', '', '', '']);
+  }
+  if (pendentes.length > 0) {
+    linhas.push(['NÃO ENCONTRADAS', '', '', '', '']);
+    linhas.push(['Item', 'Versão', 'Medidas', 'Kg', 'Status']);
+    pendentes.forEach(b => linhas.push([b.item, b.versao, b.tamanho, Math.round(b.peso), 'Não encontrada']));
+    linhas.push(['', '', '', '', '']);
+  }
+  if (conferencia.extras.length > 0) {
+    linhas.push(['EXTRAS', '', '', '', '']);
+    linhas.push(['Item', 'Versão', 'Medidas', 'Kg', 'Status']);
+    dados.extras.forEach(b => linhas.push([b.item, b.versao, b.tamanho || '', Math.round(b.peso), 'Extra']));
+  }
+  const ws = XLSX.utils.aoa_to_sheet(linhas);
+  ws['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 14 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Conferência');
+  XLSX.writeFile(wb, (parcial ? 'Conferencia_PARCIAL_' : 'Conferencia_') + getTimestamp() + '.xlsx');
+  mostrarToast(parcial ? 'Relatório parcial exportado' : 'Relatório exportado');
+}
+
+/* Exporta a conferência mesmo antes de finalizar (relatório parcial) */
+function confExportarParcial() {
+  let dados = obterConferenciaParaExport();
+  if (!dados) { mostrarToast('Nenhuma conferência encontrada', 'erro'); return; }
+  confExportarResultado(dados.ativa === true, dados);
+}
+
+/* Busca a conferência no localStorage (funciona mesmo com a conferência fechada) */
+function obterConferenciaParaExport() {
+  let salva = null;
+  try {
+    let txt = localStorage.getItem('conferencia');
+    if (txt) salva = JSON.parse(txt);
+  } catch (e) { salva = null; }
+  if (salva && Array.isArray(salva.fotoEstoque) && salva.fotoEstoque.length > 0) {
+    if (!Array.isArray(salva.conferidas)) salva.conferidas = [];
+    if (!Array.isArray(salva.extras)) salva.extras = [];
+    return salva;
+  }
+  if (conferencia && Array.isArray(conferencia.fotoEstoque) && conferencia.fotoEstoque.length > 0) return conferencia;
+  return null;
+}
+
+/* PDF da conferência (parcial ou final) */
+function confExportarPDFConferencia(parcial, dados) {
+  dados = dados || conferencia;
+  parcial = (parcial === true);
+  if (typeof window.jspdf === 'undefined') { mostrarToast('PDF indisponível', 'erro'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const pageW = doc.internal.pageSize.width;
+  const conferidas = dados.fotoEstoque.filter(b => dados.conferidas.includes(b.id));
+  const pendentes = dados.fotoEstoque.filter(b => !dados.conferidas.includes(b.id));
+  const extras = dados.extras || [];
+  if (conferidas.length === 0 && extras.length === 0) { mostrarToast('Nada para exportar', 'erro'); return; }
+
+  doc.setFillColor(30, 58, 138);
+  doc.rect(0, 0, pageW, 18, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.text(parcial ? 'Conferência de Estoques — PARCIAL' : 'Conferência de Estoques', 14, 12);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Gerado em: ' + new Date().toLocaleString('pt-BR'), pageW - 14, 12, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
+
+  doc.setFontSize(9);
+  doc.text('Início: ' + (dados.dataInicio || '—') +
+            '   |   Tipo: ' + (dados.tipo === 'tudo' ? 'Todos' : nomeCompletoTipo(dados.tipo)) +
+            '   |   Conferidas: ' + conferidas.length +
+            '   |   Não encontradas: ' + pendentes.length +
+            '   |   Extras: ' + extras.length, 14, 25);
+
+  let body = [];
+  conferidas.forEach(b => body.push(['Conferida', b.item, b.versao, b.tamanho || '', Math.round(b.peso)]));
+  pendentes.forEach(b => body.push(['Não encontrada', b.item, b.versao, b.tamanho || '', Math.round(b.peso)]));
+  extras.forEach(b => body.push(['Extra', b.item, b.versao, b.tamanho || '', Math.round(b.peso)]));
+
+  doc.autoTable({
+    startY: 29,
+    head: [['Status', 'Item', 'Versão', 'Medidas', 'Kg']],
+    body: body,
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [240, 244, 255] },
+    columnStyles: {
+      0: { cellWidth: 34 }, 1: { cellWidth: 40 }, 2: { cellWidth: 20 },
+      3: { cellWidth: 34 }, 4: { cellWidth: 20 }
+    }
+  });
+
+  let totalPages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFontSize(7);
+    doc.setTextColor(180, 180, 180);
+    doc.text('Página ' + p + '/' + totalPages, pageW / 2, doc.internal.pageSize.height - 5, { align: 'center' });
+  }
+
+  doc.save('Conferencia_' + (parcial ? 'PARCIAL_' : '') + getTimestamp() + '.pdf');
+  mostrarToast(parcial ? 'PDF parcial exportado' : 'PDF exportado');
+}
+
+/* ================= FIREBASE MANUAL (SALVAR / SINCRONIZAR) ================= */
+
+async function salvarManualFirebase() {
+  let btn = document.getElementById('btnSalvarFirebase');
+  if (btn) {
+    btn.classList.add('firebase-loading');
+    btn.textContent = '⏳'; // troca ícone durante o save
+  }
+
+  try {
+    if (typeof salvarNoFirebase !== 'function') {
+      mostrarToast('Firebase não configurado', 'erro');
+      return;
+    }
+
+    await salvarNoFirebase();
+
+    const agora = new Date();
+    const dataHora = agora.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'}) +
+                     ' ' +
+                     agora.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    localStorage.setItem('ultimaSincronizacao', dataHora);
+
+    if (navigator.vibrate) navigator.vibrate([80]);
+
+    // Troca para ✅ por 1.5s depois volta ao 💾
+    if (btn) {
+      btn.classList.remove('firebase-loading');
+      btn.textContent = '✅';
+      setTimeout(() => { btn.textContent = '💾'; }, 1500);
+    }
+
+    mostrarToast('☁️ Salvo na nuvem');
+
+  } catch (e) {
+    mostrarToast('Erro ao salvar', 'erro');
+    if (btn) {
+      btn.textContent = '❌';
+      setTimeout(() => { btn.textContent = '💾'; }, 1500);
+    }
+  } finally {
+    if (btn) btn.classList.remove('firebase-loading');
+  }
+}
+
+async function sincronizarManualFirebase() {
+  let btn = document.getElementById('btnSincronizarFirebase');
+  if (btn) btn.classList.add('firebase-loading');
+  
+  try {
+    if (typeof escutarFirebase !== 'function' && typeof baixarDoFirebase !== 'function') {
+      mostrarToast('Firebase não configurado', 'erro');
+      return;
+    }
+    
+    
+    // Tenta usar baixarDoFirebase() se existir, senão usa escutarFirebase()
+    if (typeof baixarDoFirebase === 'function') {
+      await baixarDoFirebase();
+    } else {
+      await escutarFirebase();
+    }
+    
+    atualizarTudo();
+    
+    if (navigator.vibrate) navigator.vibrate([80]);
+    mostrarToast('☁️ Sincronizado da nuvem');
+    
+    if (btn) {
+      btn.classList.add('firebase-sucesso');
+      setTimeout(() => btn.classList.remove('firebase-sucesso'), 1500);
+    }
+  } catch (e) {
+    console.error('Erro ao sincronizar:', e);
+    mostrarToast('Erro ao sincronizar', 'erro');
+  } finally {
+    if (btn) btn.classList.remove('firebase-loading');
+  }
+}
+
+window.salvarManualFirebase = salvarManualFirebase;
+window.sincronizarManualFirebase = sincronizarManualFirebase;
+
+/* ================= MODAL CONFIRMAR SINCRONIZAR ================= */
+
+function confirmarSincronizar() {
+  const ultimaData = localStorage.getItem('ultimaSincronizacao') || 'Nunca salvo';
+  const labelData = document.getElementById('syncDataSalva');
+  if (labelData) labelData.textContent = 'Último save: ' + ultimaData;
+  document.getElementById('modalConfirmarSync').classList.remove('hidden');
+}
+
+function fecharModalSync() {
+  document.getElementById('modalConfirmarSync').classList.add('hidden');
+}
+
+async function executarSincronizar() {
+  fecharModalSync();
+  await sincronizarManualFirebase();
+}
+
+window.confirmarSincronizar = confirmarSincronizar;
+window.fecharModalSync = fecharModalSync;
+window.executarSincronizar = executarSincronizar;
 
 /* ================= EXPOSIÇÃO GLOBAL ================= */
 
@@ -4751,3 +5622,271 @@ window.geradorLimparEFechar = geradorLimparEFechar;
 window.abrirConfigDataProducao = abrirConfigDataProducao;
 window.fecharConfigDataProducao = fecharConfigDataProducao;
 window.salvarOpcaoData = salvarOpcaoData;
+/* ================= CONFERÊNCIA COLABORATIVA ================= */
+
+let modoConferencia = 1; // 1 ou 2 usuários
+let nomeUsuarioConferencia = localStorage.getItem('nomeUsuarioConf') || '';
+let confJaFinalizada = false;
+
+function abrirInicioConferencia() {
+  fecharModalConfig();
+
+  // Verifica conferência em andamento primeiro
+  let salva = localStorage.getItem('conferencia');
+  if (salva) {
+    try {
+      let dados = JSON.parse(salva);
+      if (dados.ativa) {
+        if (confirm('Existe uma conferência em andamento.\n\nContinuar?')) {
+          conferencia = dados;
+          mostrarTelaConf('confTelaAndamento');
+          confRenderizarLista();
+          document.getElementById('modalConferencia').classList.remove('hidden');
+          return;
+        } else {
+          localStorage.removeItem('conferencia');
+          // Limpa também no Firebase se estava colaborativa
+          if (nomeUsuarioConferencia) {
+            try {
+              db.collection('conferencias').doc(nomeUsuarioConferencia.toLowerCase()).delete();
+            } catch(e) {}
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Abre modal inicial
+  let modal = document.getElementById('modalInicioConferencia');
+  if (!modal) { abrirConferencia(); return; }
+
+  // Preenche nome salvo
+  let input = document.getElementById('confNomeInput');
+  let nomeSalvo = document.getElementById('confNomeSalvo');
+  if (input && nomeUsuarioConferencia) {
+    input.value = nomeUsuarioConferencia;
+    if (nomeSalvo) nomeSalvo.style.display = 'block';
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function fecharInicioConferencia() {
+  let modal = document.getElementById('modalInicioConferencia');
+  if (modal) modal.classList.add('hidden');
+}
+
+function salvarNomeConferencia() {
+  let input = document.getElementById('confNomeInput');
+  if (!input || !input.value.trim()) {
+    mostrarToast('Digite seu nome', 'erro'); return;
+  }
+  nomeUsuarioConferencia = input.value.trim();
+  localStorage.setItem('nomeUsuarioConf', nomeUsuarioConferencia);
+  let nomeSalvo = document.getElementById('confNomeSalvo');
+  if (nomeSalvo) nomeSalvo.style.display = 'block';
+  mostrarToast('Nome salvo: ' + nomeUsuarioConferencia);
+}
+
+function selecionarModoConferencia(modo) {
+  if (!nomeUsuarioConferencia) {
+    mostrarToast('Salve seu nome primeiro', 'erro'); return;
+  }
+  modoConferencia = modo;
+  fecharInicioConferencia();
+  abrirConferencia();
+}
+
+let confUserNamesListener = null;
+
+function iniciarMonitoramentoUsuarios() {
+  if (confUserNamesListener) { clearInterval(confUserNamesListener); confUserNamesListener = null; }
+  if (modoConferencia !== 2 || !nomeUsuarioConferencia) return;
+  // Polling a cada 2s ao invés de onSnapshot
+  confUserNamesListener = setInterval(async function() {
+    try {
+      let snap = await db.collection('conferencias').get();
+      let usuariosConectados = [];
+      snap.forEach(doc => {
+        if (doc.id.startsWith('_')) return;
+        let d = doc.data();
+        if (d.usuario && d.usuario.toLowerCase() !== nomeUsuarioConferencia.toLowerCase()) {
+          if (d.finalizada) usuariosConectados.push(d.usuario + ' ✅');
+          else usuariosConectados.push(d.usuario + ' 👤');
+        }
+      });
+      let container = document.getElementById('confUsuariosContainer');
+      if (!container) return;
+      if (usuariosConectados.length > 0) {
+        container.style.display = 'flex';
+        container.innerHTML = '👥 <strong>Conferindo:</strong> ' + usuariosConectados.join(' | ');
+      } else {
+        container.style.display = 'none';
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+// Salva parcial no Firebase durante a conferência
+async function confSalvarFirebase() {
+  if (!nomeUsuarioConferencia || modoConferencia === 1) return;
+  if (confJaFinalizada) return; // nunca sobrescreve após finalizar
+  try {
+    await db.collection('conferencias')
+      .doc(nomeUsuarioConferencia.toLowerCase())
+      .set({
+        usuario: nomeUsuarioConferencia,
+        conferidas: conferencia.conferidas,
+        extras: conferencia.extras,
+        fotoEstoque: conferencia.fotoEstoque,
+        ativa: conferencia.ativa,
+        finalizada: false,
+        ultimaAtualizacao: new Date().toISOString()
+      });
+  } catch(e) {
+    console.error('Erro ao salvar conferência parcial:', e);
+  }
+}
+
+// Marca como finalizada e verifica se pode juntar
+async function confFinalizarColaborativo() {
+  // Salva no Firebase SEMPRE que tiver nome (funciona mesmo em modo solo)
+  if (nomeUsuarioConferencia) {
+    try {
+      await db.collection('conferencias').doc(nomeUsuarioConferencia.toLowerCase()).set({
+        usuario: String(nomeUsuarioConferencia),
+        conferidas: conferencia.conferidas || [],
+        extras: conferencia.extras || [],
+        fotoEstoque: conferencia.fotoEstoque || [],
+        ativa: false,
+        finalizada: true,
+        ultimaAtualizacao: new Date().toISOString()
+      }, { merge: false });
+      confJaFinalizada = true;
+      console.log('Salvei como finalizada:', nomeUsuarioConferencia);
+    } catch(e) {
+      console.error('Erro ao salvar no Firebase:', e);
+    }
+  }
+
+  // Mostra resultado — o botão Juntar já está sempre visível
+  finalizarConferencia();
+}
+
+async function juntarConferencias() {
+  try {
+    let snapshot = await db.collection('conferencias').get();
+    let todas = [];
+    let nomesUsuarios = [];
+    let fotoEstoqueMerged = null;
+    
+    snapshot.forEach(doc => {
+      if (doc.id.startsWith('_')) return;
+      let d = doc.data();
+      if (d.usuario) nomesUsuarios.push(d.usuario);
+      if (d.fotoEstoque) fotoEstoqueMerged = d.fotoEstoque;
+      if (d.result && d.result.fotoEstoque) fotoEstoqueMerged = d.result.fotoEstoque;
+      if (d.result && d.result.conferidas) {
+        // _merged_ doc com resultado
+        todas.push({ usuario: d.mergedBy ? d.mergedBy.join('+') : 'merged', conferidas: d.result.conferidas, extras: d.result.extras, fotoEstoque: d.result.fotoEstoque });
+      }
+      if (d.conferidas && !d.result) {
+        // Doc de usuário normal
+        todas.push(d);
+      }
+    });
+
+    // Junta TUDO (dados locais + Firebase + _merged_)
+    let todasConferidas = new Set(conferencia.conferidas || []);
+    let todosExtras = [...(conferencia.extras || [])];
+    let extrasChaves = new Set();
+    todosExtras.forEach(e => extrasChaves.add(e.item + '|' + e.versao + '|' + e.peso));
+
+    let meuNome = (nomeUsuarioConferencia || '').toLowerCase();
+    let achouOutro = false;
+    
+    todas.forEach(conf => {
+      let nomeConf = (conf.usuario || '').toLowerCase();
+      // Só adiciona se for de outro usuário OU se é merged
+      if (nomeConf !== meuNome || conf.usuario === 'merged') {
+        achouOutro = true;
+        (conf.conferidas || []).forEach(id => todasConferidas.add(id));
+        (conf.extras || []).forEach(extra => {
+          let chave = extra.item + '|' + extra.versao + '|' + extra.peso;
+          if (!extrasChaves.has(chave)) { extrasChaves.add(chave); todosExtras.push(extra); }
+        });
+      }
+    });
+
+    // Se só tem os próprios dados, avisa
+    if (!achouOutro) {
+      let totalOutros = todas.filter(c => (c.usuario || '').toLowerCase() !== meuNome).length;
+      if (totalOutros === 0) {
+        mostrarToast('ℹ️ Nenhum dado de outro operador encontrado', 'erro');
+        return;
+      }
+    }
+
+    // Atualiza conferência local
+    conferencia.conferidas = Array.from(todasConferidas);
+    conferencia.extras = todosExtras;
+    if (fotoEstoqueMerged) conferencia.fotoEstoque = fotoEstoqueMerged;
+    conferencia.ativa = false;
+
+    // Escreve _merged_ atualizado
+    try {
+      await db.collection('conferencias').doc('_merged_' + Date.now()).set({
+        merged: true,
+        mergedAt: new Date().toISOString(),
+        mergedBy: nomesUsuarios.length > 0 ? nomesUsuarios : ['desconhecido'],
+        result: {
+          conferidas: Array.from(todasConferidas),
+          extras: todosExtras,
+          fotoEstoque: conferencia.fotoEstoque
+        }
+      });
+    } catch(e) {}
+
+    confSalvar();
+    finalizarConferencia();
+    
+    let totalUnico = nomesUsuarios.filter((n, i) => nomesUsuarios.indexOf(n) === i);
+    let msg = '✅ ' + (totalUnico.length > 0 ? totalUnico.join(' + ') + ' — ' : '') + 'Conferências unidas!';
+    mostrarToast(msg);
+    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+
+  } catch(e) {
+    console.error('Erro ao juntar conferências:', e);
+    mostrarToast('Erro ao juntar conferências', 'erro');
+  }
+}
+
+window.abrirInicioConferencia = abrirInicioConferencia;
+window.fecharInicioConferencia = fecharInicioConferencia;
+window.salvarNomeConferencia = salvarNomeConferencia;
+window.selecionarModoConferencia = selecionarModoConferencia;
+window.confFinalizarColaborativo = confFinalizarColaborativo;
+window.juntarConferencias = juntarConferencias;
+window.abrirConferencia = abrirConferencia;
+window.fecharConferencia = fecharConferencia;
+window.continuarConferencia = continuarConferencia;
+window.iniciarConferencia = iniciarConferencia;
+window.pausarConferencia = pausarConferencia;
+window.confMarcarManual = confMarcarManual;
+window.confDesmarcar = confDesmarcar;
+window.confRemoverExtra = confRemoverExtra;
+window.confFiltrarLista = confFiltrarLista;
+window.confScannerQR = confScannerQR;
+window.confAbrirColetor = confAbrirColetor;
+// window.confScannerContinuo = confScannerContinuo; // função não definida
+window.confFecharScanner = confFecharScanner;
+window.finalizarConferencia = finalizarConferencia;
+window.finalizarConferenciaSilenciosa = finalizarConferenciaSilenciosa;
+window.confAjustarEstoque = confAjustarEstoque;
+window.confExportarResultado = confExportarResultado;
+window.confExportarParcial = confExportarParcial;
+window.confExportarPDFConferencia = confExportarPDFConferencia;
+window.obterConferenciaParaExport = obterConferenciaParaExport;
+
+// DOMContentLoaded consolidado no iniciarMonitoramentoColetor
+// O coletor é tratado exclusivamente pela função acima
